@@ -11,8 +11,15 @@
 /out/
 next-env.d.ts
 
-# Production & runtime data (persisted locally on server)
+# Production & runtime user data (never commit personal workout data)
 /data/
+*.csv
+*.db
+*.sqlite
+*.sqlite3
+goals.json
+settings.json
+csv_meta.json
 
 # Misc
 .DS_Store

@@ -17,6 +17,7 @@ interface HeaderProps {
   onResetToDefault: () => void;
   dataSourceLabel: string;
   isCustomCsv?: boolean;
+  hasDefaultCsv?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -32,6 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
   onResetToDefault,
   dataSourceLabel,
   isCustomCsv,
+  hasDefaultCsv,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isEditingBw, setIsEditingBw] = useState(false);
@@ -215,8 +217,8 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Importer CSV</span>
             </button>
 
-            {/* Reset to project default CSV */}
-            {(isCustomCsv ?? dataSourceLabel !== 'Export Liftoff du projet') && (
+            {/* Reset to project default CSV (only shown when a default fallback exists) */}
+            {Boolean(hasDefaultCsv && isCustomCsv) && (
               <button
                 onClick={onResetToDefault}
                 className="p-1.5 rounded-md bg-zinc-900 border border-zinc-800 hover:text-zinc-200 text-zinc-400"

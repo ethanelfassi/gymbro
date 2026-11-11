@@ -5,9 +5,9 @@ Plateforme web d'analyse de données de musculation et de surcharge progressive,
 ## Caractéristiques & Fonctionnalités
 
 * **Design Sobre & Épuré** : Palette feutrée Dark Mode, zéro emoji, zéro effet néon, typographie soignée avec alignement tabulaire des chiffres (`tabular-nums font-mono`).
-* **Ingestion Automatique & Persistance Serveur (`data/`)** :
-  * Chargement du fichier uploadé stocké côté serveur (`data/workout_data.csv`), avec repli automatique sur `public/liftoff_workout_data.csv`.
-  * Support du glisser-déposer (Drag & Drop) d'un nouvel export CSV, des objectifs (`data/goals.json`) et réglages (`data/settings.json`) synchronisés entre tous vos appareils.
+* **Ingestion & Persistance Serveur (`data/`)** :
+  * Aucune donnée personnelle n'est versionnée dans le dépôt : importez votre export Liftoff directement via glisser-déposer ou le bouton « Importer CSV ».
+  * Persistance côté serveur du CSV (`data/workout_data.csv`), des objectifs (`data/goals.json`) et réglages (`data/settings.json`) synchronisés entre tous vos appareils.
 * **Nettoyage & Normalisation Robuste** :
   * Filtrage automatique des séances vides.
   * Isolation des activités de plein air (`Randonnée`, `Marche`) pour ne pas fausser les métriques de musculation.

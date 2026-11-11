@@ -13,6 +13,7 @@ export interface StoredCsvPayload {
   csvText: string;
   filename: string;
   isCustom: boolean;
+  hasDefault: boolean;
   updatedAt?: string;
 }
 
@@ -89,6 +90,8 @@ async function fileExists(filePath: string): Promise<boolean> {
  * falling back to the repository's default Liftoff CSV if no custom import exists.
  */
 export async function getStoredCsv(): Promise<StoredCsvPayload> {
+  const hasDefault = await fileExists(DEFAULT_PUBLIC_CSV_PATH);
+
   if (await fileExists(WORKOUT_CSV_PATH)) {
     const [csvText, meta] = await Promise.all([
       fs.readFile(WORKOUT_CSV_PATH, 'utf-8'),
@@ -98,16 +101,18 @@ export async function getStoredCsv(): Promise<StoredCsvPayload> {
       csvText,
       filename: meta?.filename || 'Import serveur',
       isCustom: true,
+      hasDefault,
       updatedAt: meta?.updatedAt,
     };
   }
 
-  if (await fileExists(DEFAULT_PUBLIC_CSV_PATH)) {
+  if (hasDefault) {
     const csvText = await fs.readFile(DEFAULT_PUBLIC_CSV_PATH, 'utf-8');
     return {
       csvText,
       filename: 'Export Liftoff du projet',
       isCustom: false,
+      hasDefault: true,
     };
   }
 
@@ -115,6 +120,7 @@ export async function getStoredCsv(): Promise<StoredCsvPayload> {
     csvText: '',
     filename: 'Aucune donnée',
     isCustom: false,
+    hasDefault: false,
   };
 }
 
@@ -129,6 +135,7 @@ export async function saveStoredCsv(
     const safeName = path.basename(filename || 'liftoff_export.csv').slice(0, 120);
     const updatedAt = new Date().toISOString();
     const meta: CsvMeta = { filename: safeName, updatedAt };
+    const hasDefault = await fileExists(DEFAULT_PUBLIC_CSV_PATH);
 
     await writeFileAtomic(WORKOUT_CSV_PATH, csvText);
     await writeFileAtomic(CSV_META_PATH, JSON.stringify(meta, null, 2));
@@ -137,6 +144,7 @@ export async function saveStoredCsv(
       csvText,
       filename: safeName,
       isCustom: true,
+      hasDefault,
       updatedAt,
     };
   });

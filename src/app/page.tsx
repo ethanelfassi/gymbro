@@ -15,8 +15,9 @@ import { UploadCloud } from 'lucide-react';
 
 export default function Home() {
   const [rawCsvText, setRawCsvText] = useState<string>('');
-  const [dataSourceLabel, setDataSourceLabel] = useState<string>('Export Liftoff du projet');
+  const [dataSourceLabel, setDataSourceLabel] = useState<string>('Aucune donnée');
   const [isCustomCsv, setIsCustomCsv] = useState<boolean>(false);
+  const [hasDefaultCsv, setHasDefaultCsv] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [period, setPeriod] = useState<TimePeriodFilter>('block_2026');
   const [unit, setUnit] = useState<UnitSystem>('lbs');
@@ -43,8 +44,9 @@ export default function Home() {
       if (csvRes.ok) {
         const csvData = await csvRes.json();
         setRawCsvText(csvData.csvText || '');
-        setDataSourceLabel(csvData.filename || 'Export Liftoff du projet');
+        setDataSourceLabel(csvData.filename || 'Aucune donnée');
         setIsCustomCsv(Boolean(csvData.isCustom));
+        setHasDefaultCsv(Boolean(csvData.hasDefault));
       }
 
       if (goalsRes.ok) {
@@ -97,6 +99,7 @@ export default function Home() {
       const saved = await res.json();
       setDataSourceLabel(saved.filename || filename);
       setIsCustomCsv(Boolean(saved.isCustom));
+      setHasDefaultCsv(Boolean(saved.hasDefault));
     } catch (err) {
       console.error('Error saving CSV to server:', err);
       setSyncError('Erreur lors de la sauvegarde du CSV sur le serveur.');
@@ -110,8 +113,9 @@ export default function Home() {
       if (!res.ok) throw new Error('Reset failed');
       const data = await res.json();
       setRawCsvText(data.csvText || '');
-      setDataSourceLabel(data.filename || 'Export Liftoff du projet');
+      setDataSourceLabel(data.filename || 'Aucune donnée');
       setIsCustomCsv(Boolean(data.isCustom));
+      setHasDefaultCsv(Boolean(data.hasDefault));
     } catch (err) {
       console.error('Error resetting CSV:', err);
       setSyncError('Erreur lors de la réinitialisation du CSV sur le serveur.');
@@ -279,6 +283,7 @@ export default function Home() {
         onResetToDefault={handleResetToDefault}
         dataSourceLabel={dataSourceLabel}
         isCustomCsv={isCustomCsv}
+        hasDefaultCsv={hasDefaultCsv}
       />
 
       {/* Navigation tabs */}
@@ -305,6 +310,36 @@ export default function Home() {
         {isLoading ? (
           <div className="h-64 flex items-center justify-center font-mono text-xs text-zinc-500">
             Chargement et parsing des données Liftoff...
+          </div>
+        ) : !rawCsvText.trim() ? (
+          <div className="p-10 rounded-lg bg-zinc-900/40 border border-dashed border-zinc-700 text-center space-y-3">
+            <UploadCloud className="w-10 h-10 text-zinc-500 mx-auto" />
+            <div className="text-sm font-semibold text-zinc-200">
+              Aucune donnée d'entraînement importée
+            </div>
+            <p className="text-xs font-mono text-zinc-500 max-w-md mx-auto">
+              Glisse-dépose ton fichier export CSV Liftoff sur cette fenêtre ou utilise le bouton « Importer CSV » dans l'en-tête.
+            </p>
+            <div>
+              <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-md bg-zinc-100 hover:bg-zinc-200 text-zinc-900 text-xs font-mono font-semibold cursor-pointer transition-colors">
+                <span>Choisir un fichier CSV</span>
+                <input
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                      const text = ev.target?.result as string;
+                      if (text) void handleCsvUpload(text, file.name);
+                    };
+                    reader.readAsText(file);
+                  }}
+                />
+              </label>
+            </div>
           </div>
         ) : filteredSessions.length === 0 ? (
           <div className="p-8 rounded-lg bg-zinc-900/40 border border-zinc-800 text-center font-mono text-xs text-zinc-500 space-y-2">

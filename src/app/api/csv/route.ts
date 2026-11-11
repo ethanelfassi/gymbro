@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       filename: saved.filename,
       isCustom: saved.isCustom,
+      hasDefault: saved.hasDefault,
       updatedAt: saved.updatedAt,
     });
   } catch (err) {
