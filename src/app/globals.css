@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 224 25% 6%;
+  --foreground: 210 20% 96%;
+  --card: 224 22% 9%;
+  --card-subtle: 224 20% 12%;
+  --card-foreground: 210 20% 96%;
+  --border: 224 16% 16%;
+  --input: 224 16% 18%;
+  --muted: 224 16% 15%;
+  --muted-foreground: 217 14% 60%;
+  --accent: 224 16% 20%;
+  --accent-foreground: 210 20% 98%;
+  --ring: 224 16% 35%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background-color: #090B0E;
+  color: #E2E8F0;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular figures for numbers */
+.num-tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #090B0E;
+}
+::-webkit-scrollbar-thumb {
+  background: #1E232B;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2D3440;
+}

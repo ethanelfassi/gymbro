@@ -1,0 +1,17 @@
+[Unit]
+Description=GymBro Analytics (Next.js)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/gymbro
+Environment=NODE_ENV=production
+Environment=PORT=3005
+ExecStart=/usr/bin/npm run start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
