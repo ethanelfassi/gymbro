@@ -70,9 +70,23 @@ export const Header: React.FC<HeaderProps> = ({
           
           {/* Logo & Title */}
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded border border-zinc-700 bg-zinc-900 flex items-center justify-center font-mono font-semibold text-xs tracking-wider text-zinc-200">
-              GB
-            </div>
+            <svg
+              viewBox="0 0 512 512"
+              fill="none"
+              aria-label="GymBro Analytics"
+              className="w-8 h-8 rounded-md shrink-0"
+            >
+              <rect x="12" y="12" width="488" height="488" rx="108" fill="#0B0E14" stroke="#262D38" strokeWidth="14" />
+              <line x1="48" y1="292" x2="464" y2="292" stroke="#161C26" strokeWidth="4" />
+              <rect x="88" y="280" width="336" height="24" rx="12" fill="#F4F4F5" />
+              <rect x="122" y="226" width="28" height="132" rx="8" fill="#949CA9" />
+              <rect x="158" y="192" width="38" height="200" rx="10" fill="#F4F4F5" />
+              <rect x="316" y="192" width="38" height="200" rx="10" fill="#F4F4F5" />
+              <rect x="362" y="226" width="28" height="132" rx="8" fill="#949CA9" />
+              <rect x="212" y="208" width="22" height="46" rx="6" fill="#4B5566" />
+              <rect x="245" y="170" width="22" height="84" rx="6" fill="#94A3B8" />
+              <rect x="278" y="120" width="22" height="134" rx="6" fill="#38BDF8" />
+            </svg>
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-sm font-semibold tracking-wide text-zinc-100 uppercase">
