@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { WorkoutSession, TimePeriodFilter, UnitSystem, WorkoutGoal } from '@/lib/types';
 import { cleanAndParseLiftoffCSV, filterSessionsByPeriod, extractAllExerciseNotes } from '@/lib/analytics';
-import { loadGoalsFromStorage, saveGoalsToStorage } from '@/lib/goals';
 import { Header } from '@/components/Header';
 import { Navigation, ActiveTab } from '@/components/Navigation';
 import { OverviewTab } from '@/components/tabs/OverviewTab';
@@ -17,6 +16,7 @@ import { UploadCloud } from 'lucide-react';
 export default function Home() {
   const [rawCsvText, setRawCsvText] = useState<string>('');
   const [dataSourceLabel, setDataSourceLabel] = useState<string>('Export Liftoff du projet');
+  const [isCustomCsv, setIsCustomCsv] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [period, setPeriod] = useState<TimePeriodFilter>('block_2026');
   const [unit, setUnit] = useState<UnitSystem>('lbs');
@@ -26,75 +26,131 @@ export default function Home() {
   const [targetSessionId, setTargetSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [goals, setGoals] = useState<WorkoutGoal[]>([]);
 
-  // Load project default CSV on mount
-  const loadDefaultCsv = useCallback(async () => {
+  // Load persisted data (CSV, goals, settings) from server storage on mount
+  const loadServerData = useCallback(async () => {
     setIsLoading(true);
+    setSyncError(null);
     try {
-      // Load saved goals
-      const storedGoals = loadGoalsFromStorage();
-      setGoals(storedGoals);
+      const [csvRes, goalsRes, settingsRes] = await Promise.all([
+        fetch('/api/csv', { cache: 'no-store' }),
+        fetch('/api/goals', { cache: 'no-store' }),
+        fetch('/api/settings', { cache: 'no-store' }),
+      ]);
 
-      // Check localStorage for previously saved upload
-      const savedCsv = localStorage.getItem('gymbro_custom_csv');
-      const savedLabel = localStorage.getItem('gymbro_custom_csv_label');
-      const savedBw = localStorage.getItem('gymbro_bodyweight');
-      const savedUnit = localStorage.getItem('gymbro_unit');
+      if (csvRes.ok) {
+        const csvData = await csvRes.json();
+        setRawCsvText(csvData.csvText || '');
+        setDataSourceLabel(csvData.filename || 'Export Liftoff du projet');
+        setIsCustomCsv(Boolean(csvData.isCustom));
+      }
 
-      if (savedBw) setBodyweightLbs(parseFloat(savedBw));
-      if (savedUnit) setUnit(savedUnit as UnitSystem);
+      if (goalsRes.ok) {
+        const goalsData = await goalsRes.json();
+        if (Array.isArray(goalsData.goals)) {
+          setGoals(goalsData.goals);
+        }
+      }
 
-      if (savedCsv && savedLabel) {
-        setRawCsvText(savedCsv);
-        setDataSourceLabel(savedLabel);
-      } else {
-        const res = await fetch('/liftoff_workout_data.csv');
-        const text = await res.text();
-        setRawCsvText(text);
-        setDataSourceLabel('Export Liftoff du projet');
+      if (settingsRes.ok) {
+        const settings = await settingsRes.json();
+        if (settings.unit === 'kg' || settings.unit === 'lbs') {
+          setUnit(settings.unit);
+        }
+        if (typeof settings.bodyweightLbs === 'number' && settings.bodyweightLbs > 0) {
+          setBodyweightLbs(settings.bodyweightLbs);
+        }
+        if (typeof settings.excludeWarmup === 'boolean') {
+          setExcludeWarmup(settings.excludeWarmup);
+        }
       }
     } catch (err) {
-      console.error('Error fetching CSV:', err);
+      console.error('Error loading server data:', err);
+      setSyncError('Impossible de charger les données depuis le serveur.');
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadDefaultCsv();
-  }, [loadDefaultCsv]);
+    loadServerData();
+  }, [loadServerData]);
 
-  // Handle uploaded CSV
-  const handleCsvUpload = (csvText: string, filename: string) => {
+  // Persist uploaded CSV on server
+  const handleCsvUpload = async (csvText: string, filename: string) => {
+    setSyncError(null);
     setRawCsvText(csvText);
     setDataSourceLabel(filename);
+    setIsCustomCsv(true);
+
     try {
-      localStorage.setItem('gymbro_custom_csv', csvText);
-      localStorage.setItem('gymbro_custom_csv_label', filename);
-    } catch {
-      // ignore storage quota issues
+      const res = await fetch('/api/csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csvText, filename }),
+      });
+      if (!res.ok) {
+        throw new Error('Save failed');
+      }
+      const saved = await res.json();
+      setDataSourceLabel(saved.filename || filename);
+      setIsCustomCsv(Boolean(saved.isCustom));
+    } catch (err) {
+      console.error('Error saving CSV to server:', err);
+      setSyncError('Erreur lors de la sauvegarde du CSV sur le serveur.');
     }
   };
 
   const handleResetToDefault = async () => {
-    localStorage.removeItem('gymbro_custom_csv');
-    localStorage.removeItem('gymbro_custom_csv_label');
-    const res = await fetch('/liftoff_workout_data.csv');
-    const text = await res.text();
-    setRawCsvText(text);
-    setDataSourceLabel('Export Liftoff du projet');
+    setSyncError(null);
+    try {
+      const res = await fetch('/api/csv', { method: 'DELETE' });
+      if (!res.ok) throw new Error('Reset failed');
+      const data = await res.json();
+      setRawCsvText(data.csvText || '');
+      setDataSourceLabel(data.filename || 'Export Liftoff du projet');
+      setIsCustomCsv(Boolean(data.isCustom));
+    } catch (err) {
+      console.error('Error resetting CSV:', err);
+      setSyncError('Erreur lors de la réinitialisation du CSV sur le serveur.');
+    }
+  };
+
+  const saveSettingsPartial = async (partial: {
+    unit?: UnitSystem;
+    bodyweightLbs?: number;
+    excludeWarmup?: boolean;
+  }) => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(partial),
+      });
+      if (!res.ok) throw new Error('Settings save failed');
+    } catch (err) {
+      console.error('Error saving settings:', err);
+      setSyncError('Erreur lors de la sauvegarde des réglages sur le serveur.');
+    }
   };
 
   const handleBodyweightChange = (bw: number) => {
     setBodyweightLbs(bw);
-    localStorage.setItem('gymbro_bodyweight', String(bw));
+    void saveSettingsPartial({ bodyweightLbs: bw });
   };
 
   const handleUnitToggle = () => {
     const nextUnit: UnitSystem = unit === 'lbs' ? 'kg' : 'lbs';
     setUnit(nextUnit);
-    localStorage.setItem('gymbro_unit', nextUnit);
+    void saveSettingsPartial({ unit: nextUnit });
+  };
+
+  const handleExcludeWarmupToggle = () => {
+    const next = !excludeWarmup;
+    setExcludeWarmup(next);
+    void saveSettingsPartial({ excludeWarmup: next });
   };
 
   // Parse all workout sessions from raw CSV
@@ -150,21 +206,43 @@ export default function Home() {
     setActiveTab('log');
   };
 
-  const handleSaveGoal = (goal: WorkoutGoal) => {
+  const handleSaveGoal = async (goal: WorkoutGoal) => {
+    setSyncError(null);
     setGoals((prev) => {
       const exists = prev.some((g) => g.id === goal.id);
-      const updated = exists ? prev.map((g) => (g.id === goal.id ? goal : g)) : [...prev, goal];
-      saveGoalsToStorage(updated);
-      return updated;
+      return exists ? prev.map((g) => (g.id === goal.id ? goal : g)) : [...prev, goal];
     });
+
+    try {
+      const res = await fetch('/api/goals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goal }),
+      });
+      if (!res.ok) throw new Error('Save goal failed');
+      const data = await res.json();
+      if (Array.isArray(data.goals)) setGoals(data.goals);
+    } catch (err) {
+      console.error('Error saving goal:', err);
+      setSyncError('Erreur lors de la sauvegarde de l\'objectif sur le serveur.');
+    }
   };
 
-  const handleDeleteGoal = (goalId: string) => {
-    setGoals((prev) => {
-      const updated = prev.filter((g) => g.id !== goalId);
-      saveGoalsToStorage(updated);
-      return updated;
-    });
+  const handleDeleteGoal = async (goalId: string) => {
+    setSyncError(null);
+    setGoals((prev) => prev.filter((g) => g.id !== goalId));
+
+    try {
+      const res = await fetch(`/api/goals?id=${encodeURIComponent(goalId)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('Delete goal failed');
+      const data = await res.json();
+      if (Array.isArray(data.goals)) setGoals(data.goals);
+    } catch (err) {
+      console.error('Error deleting goal:', err);
+      setSyncError('Erreur lors de la suppression de l\'objectif sur le serveur.');
+    }
   };
 
   return (
@@ -194,12 +272,13 @@ export default function Home() {
         unit={unit}
         onUnitToggle={handleUnitToggle}
         excludeWarmup={excludeWarmup}
-        onExcludeWarmupToggle={() => setExcludeWarmup(!excludeWarmup)}
+        onExcludeWarmupToggle={handleExcludeWarmupToggle}
         bodyweightLbs={bodyweightLbs}
         onBodyweightChange={handleBodyweightChange}
         onCsvUpload={handleCsvUpload}
         onResetToDefault={handleResetToDefault}
         dataSourceLabel={dataSourceLabel}
+        isCustomCsv={isCustomCsv}
       />
 
       {/* Navigation tabs */}
@@ -212,6 +291,17 @@ export default function Home() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+        {syncError && (
+          <div className="mb-4 px-3 py-2 rounded-md bg-rose-950/50 border border-rose-800/70 text-xs font-mono text-rose-300 flex items-center justify-between">
+            <span>{syncError}</span>
+            <button
+              onClick={() => setSyncError(null)}
+              className="text-rose-400 hover:text-rose-200 ml-3"
+            >
+              Fermer
+            </button>
+          </div>
+        )}
         {isLoading ? (
           <div className="h-64 flex items-center justify-center font-mono text-xs text-zinc-500">
             Chargement et parsing des données Liftoff...

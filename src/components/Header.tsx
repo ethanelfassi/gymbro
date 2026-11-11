@@ -16,6 +16,7 @@ interface HeaderProps {
   onCsvUpload: (csvText: string, filename: string) => void;
   onResetToDefault: () => void;
   dataSourceLabel: string;
+  isCustomCsv?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -30,6 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   onCsvUpload,
   onResetToDefault,
   dataSourceLabel,
+  isCustomCsv,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isEditingBw, setIsEditingBw] = useState(false);
@@ -184,7 +186,10 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
               ) : (
                 <button
-                  onClick={() => setIsEditingBw(true)}
+                  onClick={() => {
+                    setBwInput(String(bodyweightLbs));
+                    setIsEditingBw(true);
+                  }}
                   className="hover:text-zinc-200 text-zinc-300 font-semibold underline decoration-zinc-700 decoration-dotted underline-offset-2"
                   title="Cliquer pour modifier ton poids de corps (utilisé pour le calcul de charge nette sur Dips & Tractions)"
                 >
@@ -211,7 +216,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {/* Reset to project default CSV */}
-            {dataSourceLabel !== 'Export Liftoff du projet' && (
+            {(isCustomCsv ?? dataSourceLabel !== 'Export Liftoff du projet') && (
               <button
                 onClick={onResetToDefault}
                 className="p-1.5 rounded-md bg-zinc-900 border border-zinc-800 hover:text-zinc-200 text-zinc-400"
