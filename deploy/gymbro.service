@@ -1,5 +1,5 @@
 [Unit]
-Description=GymBro Analytics (Next.js)
+Description=GymBro Analytics Next.js Service
 After=network-online.target tailscaled.service
 Wants=network-online.target
 
@@ -9,8 +9,9 @@ User=pi
 WorkingDirectory=/home/pi/gymbro
 Environment=NODE_ENV=production
 Environment=PORT=3005
-ExecStart=/usr/bin/npm run start
-Restart=on-failure
+Environment=HOSTNAME=0.0.0.0
+ExecStart=/usr/local/bin/node node_modules/.bin/next start -p 3005 -H 0.0.0.0
+Restart=always
 RestartSec=5
 
 [Install]
