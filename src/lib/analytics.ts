@@ -1,5 +1,14 @@
 import Papa from 'papaparse';
-import { RawWorkoutRow, WorkoutSession, WorkoutSet, TimePeriodFilter, UnitSystem, MuscleGroup, MovementType } from './types';
+import {
+  RawWorkoutRow,
+  WorkoutSession,
+  WorkoutSet,
+  TimePeriodFilter,
+  UnitSystem,
+  MuscleGroup,
+  MovementType,
+  ExerciseMechanic,
+} from './types';
 import { getExerciseMeta } from './taxonomy';
 
 export function parseDurationToMinutes(durationStr?: string): number {
@@ -173,6 +182,9 @@ export function cleanAndParseLiftoffCSV(
       let topSetReps = 0;
       let topSet1rm = 0;
       let topSetScore = 0;
+      let topSetDuration = 0;
+      let totalDuration = 0;
+      let hasTopSet = false;
 
       exRows.forEach((r, idx) => {
         const rawWeight = parseFloat(String(r.Poids || 0));
@@ -187,20 +199,29 @@ export function cleanAndParseLiftoffCSV(
           return;
         }
 
-        // Warmup rule: first set or low order with <65% of max weight when max weight is substantial
-        const isWarmup = maxSetWeight > 0 && order === 0 && rawWeight < maxSetWeight * 0.65;
+        // Warmup rule: only applies to standard exercises (<65% of max weight on first set)
+        const isWarmup =
+          meta.mechanic === 'standard' &&
+          maxSetWeight > 0 &&
+          order === 0 &&
+          rawWeight < maxSetWeight * 0.65;
 
-        // Effective load for assisted exercises: userBodyweight - assistance
+        // Effective load for assisted/bodyweight/duration exercises
         let effectiveLoad = rawWeight;
         if (meta.mechanic === 'assisted') {
-          effectiveLoad = Math.max(0, userBodyweightLbs - rawWeight);
+          effectiveLoad = Math.max(5, userBodyweightLbs - rawWeight);
         } else if (meta.mechanic === 'bodyweight') {
           effectiveLoad = userBodyweightLbs + rawWeight;
+        } else if (meta.mechanic === 'duration') {
+          effectiveLoad = rawWeight;
         }
 
-        const est1rm = meta.mechanic === 'assisted'
-          ? estimate1rm(effectiveLoad, reps)
-          : estimate1rm(rawWeight, reps);
+        const est1rm =
+          meta.mechanic === 'duration'
+            ? 0
+            : meta.mechanic === 'assisted' || meta.mechanic === 'bodyweight'
+            ? estimate1rm(effectiveLoad, reps)
+            : estimate1rm(rawWeight, reps);
 
         const setObj: WorkoutSet = {
           id: `${dateStr}_${exName}_${idx}`,
@@ -222,18 +243,64 @@ export function cleanAndParseLiftoffCSV(
 
         if (!isWarmup) {
           effectiveSetsCount++;
-          exTotalVolume += rawWeight * reps;
 
-          // Rank top set by workload: Charge × Réps (tonnage de la série)
-          const setScore = (meta.mechanic === 'assisted' || meta.mechanic === 'bodyweight')
-            ? effectiveLoad * reps
-            : rawWeight * reps;
-
-          if (setScore > topSetScore || (setScore === topSetScore && rawWeight > topSetWeight)) {
-            topSetScore = setScore;
-            topSetWeight = rawWeight;
-            topSetReps = reps;
-            topSet1rm = est1rm;
+          if (meta.mechanic === 'duration') {
+            totalDuration += durationSec;
+            const setScore = durationSec > 0 ? durationSec : distance * 1000;
+            if (
+              !hasTopSet ||
+              durationSec > topSetDuration ||
+              (durationSec === topSetDuration && setScore > topSetScore)
+            ) {
+              topSetDuration = durationSec;
+              topSetScore = setScore;
+              topSetWeight = rawWeight;
+              topSetReps = reps;
+              topSet1rm = 0;
+              hasTopSet = true;
+            }
+          } else if (meta.mechanic === 'bodyweight') {
+            exTotalVolume += effectiveLoad * reps;
+            const setScore = effectiveLoad * reps;
+            if (
+              !hasTopSet ||
+              setScore > topSetScore ||
+              (setScore === topSetScore && reps > topSetReps)
+            ) {
+              topSetScore = setScore;
+              topSetWeight = rawWeight;
+              topSetReps = reps;
+              topSet1rm = est1rm;
+              hasTopSet = true;
+            }
+          } else if (meta.mechanic === 'assisted') {
+            exTotalVolume += effectiveLoad * reps;
+            const setScore = effectiveLoad * reps;
+            if (
+              !hasTopSet ||
+              setScore > topSetScore ||
+              (setScore === topSetScore && rawWeight < topSetWeight)
+            ) {
+              topSetScore = setScore;
+              topSetWeight = rawWeight;
+              topSetReps = reps;
+              topSet1rm = est1rm;
+              hasTopSet = true;
+            }
+          } else {
+            exTotalVolume += rawWeight * reps;
+            const setScore = rawWeight * reps;
+            if (
+              !hasTopSet ||
+              setScore > topSetScore ||
+              (setScore === topSetScore && rawWeight > topSetWeight)
+            ) {
+              topSetScore = setScore;
+              topSetWeight = rawWeight;
+              topSetReps = reps;
+              topSet1rm = est1rm;
+              hasTopSet = true;
+            }
           }
         }
       });
@@ -243,12 +310,15 @@ export function cleanAndParseLiftoffCSV(
         continue;
       }
 
-      // If all were tagged warmup (unlikely), take the highest score
-      if (topSetWeight === 0 && sets.length > 0) {
+      // If no working top set was selected (e.g. all warmup), fallback to best set
+      if (!hasTopSet && sets.length > 0) {
         let bestSet = sets[0];
-        let maxScore = 0;
+        let maxScore = -1;
         for (const st of sets) {
-          const sScore = st.effectiveLoadLbs * st.reps;
+          const sScore =
+            meta.mechanic === 'duration'
+              ? st.durationSeconds
+              : st.effectiveLoadLbs * st.reps;
           if (sScore >= maxScore) {
             maxScore = sScore;
             bestSet = st;
@@ -257,7 +327,8 @@ export function cleanAndParseLiftoffCSV(
         topSetWeight = bestSet.weightLbs;
         topSetReps = bestSet.reps;
         topSet1rm = bestSet.estimated1rmLbs;
-        topSetScore = maxScore;
+        topSetDuration = bestSet.durationSeconds;
+        topSetScore = Math.max(0, maxScore);
       }
 
       sessionExercises.push({
@@ -270,6 +341,8 @@ export function cleanAndParseLiftoffCSV(
         topSetReps: topSetReps,
         topSet1rmLbs: topSet1rm,
         topSetScoreLbs: topSetScore,
+        topSetDurationSeconds: topSetDuration,
+        totalDurationSeconds: totalDuration,
       });
     }
 
@@ -369,14 +442,20 @@ export function filterSessionsByPeriod(
 export interface ExerciseProgressionAnalysis {
   exerciseName: string;
   category: MovementType;
+  mechanic: ExerciseMechanic;
   primaryMuscle: MuscleGroup;
   totalSessionsCount: number;
   lastSessionDate: string;
   lastTopSetWeight: number;
   lastTopSetReps: number;
   lastEstimated1rm: number;
+  lastTopSetDurationSeconds: number;
+  lastTotalDurationSeconds: number;
+  lastEffectiveLoadLbs: number;
   historicalMaxWeight: number;
   historicalMax1rm: number;
+  historicalMaxDurationSeconds: number;
+  historicalMaxReps: number;
   status: 'progression' | 'plateau' | 'regression';
   statusReason: string;
   nextSessionGoal: {
@@ -396,7 +475,8 @@ export interface ExerciseProgressionAnalysis {
 
 export function analyzeExerciseProgression(
   exerciseName: string,
-  sessions: WorkoutSession[]
+  sessions: WorkoutSession[],
+  userBodyweightLbs: number = 170
 ): ExerciseProgressionAnalysis | null {
   // Extract all sessions containing this exercise
   const sessionsWithEx: {
@@ -405,6 +485,9 @@ export function analyzeExerciseProgression(
     topWeight: number;
     topReps: number;
     estimated1rm: number;
+    topDuration: number;
+    totalDuration: number;
+    totalReps: number;
     volume: number;
     sets: WorkoutSet[];
   }[] = [];
@@ -415,6 +498,7 @@ export function analyzeExerciseProgression(
 
     const workingSets = exData.sets.filter((st) => !st.isWarmup);
     const setsToUse = workingSets.length > 0 ? workingSets : exData.sets;
+    const totalReps = setsToUse.reduce((acc, st) => acc + st.reps, 0);
 
     sessionsWithEx.push({
       date: s.dateStr,
@@ -422,6 +506,9 @@ export function analyzeExerciseProgression(
       topWeight: exData.topSetWeightLbs,
       topReps: exData.topSetReps,
       estimated1rm: exData.topSet1rmLbs,
+      topDuration: exData.topSetDurationSeconds || 0,
+      totalDuration: exData.totalDurationSeconds || 0,
+      totalReps,
       volume: exData.totalVolumeLbs,
       sets: setsToUse,
     });
@@ -436,78 +523,185 @@ export function analyzeExerciseProgression(
 
   let histMaxWeight = 0;
   let histMax1rm = 0;
+  let histMaxDuration = 0;
+  let histMaxReps = 0;
   for (const item of sessionsWithEx) {
     if (item.topWeight > histMaxWeight) histMaxWeight = item.topWeight;
     if (item.estimated1rm > histMax1rm) histMax1rm = item.estimated1rm;
+    if (item.topDuration > histMaxDuration) histMaxDuration = item.topDuration;
+    for (const st of item.sets) {
+      if (st.reps > histMaxReps) histMaxReps = st.reps;
+      if (st.durationSeconds > histMaxDuration) histMaxDuration = st.durationSeconds;
+    }
   }
+
+  const lastEffectiveLoadLbs =
+    meta.mechanic === 'assisted'
+      ? Math.max(5, userBodyweightLbs - last.topWeight)
+      : meta.mechanic === 'bodyweight'
+      ? userBodyweightLbs + last.topWeight
+      : last.topWeight;
 
   // Purely mathematical progression status
   let status: 'progression' | 'plateau' | 'regression' = 'plateau';
   let statusReason = "Performances stables sur les dernières séances";
 
-  if (recent.length >= 2) {
-    const prev = recent[recent.length - 2];
-    const lastScore = last.topWeight * last.topReps;
-    const prevScore = prev.topWeight * prev.topReps;
-    const diffScore = lastScore - prevScore;
-    const diff1rm = last.estimated1rm - prev.estimated1rm;
-    const diffWeight = last.topWeight - prev.topWeight;
-    const diffReps = last.topReps - prev.topReps;
-
-    if (diffScore > 10 || diff1rm > 1.5 || (diffWeight === 0 && diffReps >= 1) || (diffWeight > 0 && diffReps >= 0)) {
-      status = 'progression';
-      statusReason = diffWeight > 0 && diffReps >= 0
-        ? `+${diffWeight} lbs sur le top set (${last.topWeight} lbs × ${last.topReps})`
-        : diffWeight === 0 && diffReps > 0
-        ? `+${diffReps} rép à même charge (${last.topReps} réps à ${last.topWeight} lbs)`
-        : `Volume du top set en hausse (+${Math.round(diffScore)} lbs en charge × réps)`;
-    } else if (diffScore < -30 || diff1rm < -3 || (diffWeight === 0 && diffReps <= -2) || diffWeight < -5) {
-      status = 'regression';
-      statusReason = `Légère baisse de performance (-${Math.abs(Math.round(diffScore))} lbs en charge × réps)`;
-    } else {
-      status = 'plateau';
-      statusReason = `Charge et réps identiques sur les ${Math.min(recent.length, 3)} dernières séances`;
-    }
-  }
-
-  // Next session goal based on double progression:
-  // Standard target range: 8 - 12 reps
   let targetWeight = last.topWeight;
   let targetReps = `${last.topReps + 1} réps`;
   let rationale = `Valider 1 rép supplémentaire à ${last.topWeight} lbs`;
 
-  if (meta.mechanic === 'assisted') {
-    // Less weight = better
+  if (meta.mechanic === 'duration') {
+    if (recent.length >= 2) {
+      const prev = recent[recent.length - 2];
+      const diffDuration = last.topDuration - prev.topDuration;
+      if (diffDuration >= 2 || (diffDuration === 0 && last.totalDuration > prev.totalDuration)) {
+        status = 'progression';
+        statusReason =
+          diffDuration > 0
+            ? `+${diffDuration}s sur la meilleure série (${last.topDuration}s vs ${prev.topDuration}s)`
+            : `Temps cumulé en hausse (${last.totalDuration}s sur la séance)`;
+      } else if (diffDuration <= -5) {
+        status = 'regression';
+        statusReason = `Légère baisse de maintien (${last.topDuration}s vs ${prev.topDuration}s)`;
+      } else {
+        status = 'plateau';
+        statusReason = `Maintien stable autour de ${last.topDuration}s (record : ${histMaxDuration}s)`;
+      }
+    } else {
+      statusReason = `Meilleure série enregistrée : ${last.topDuration}s`;
+    }
+
+    const nextSec = last.topDuration + 5;
+    targetWeight = 0;
+    targetReps = `${nextSec} sec`;
+    rationale = `Viser +5 secondes de maintien sur la 1ère série (${nextSec}s au lieu de ${last.topDuration}s).`;
+  } else if (meta.mechanic === 'bodyweight') {
+    if (recent.length >= 2) {
+      const prev = recent[recent.length - 2];
+      const diffWeight = last.topWeight - prev.topWeight;
+      const diffReps = last.topReps - prev.topReps;
+      if (
+        diffWeight > 0 ||
+        (diffWeight === 0 && diffReps >= 1) ||
+        (diffWeight === 0 && diffReps === 0 && last.totalReps > prev.totalReps)
+      ) {
+        status = 'progression';
+        statusReason =
+          diffWeight > 0
+            ? `+${diffWeight} lbs de lest (${last.topReps} réps)`
+            : diffReps > 0
+            ? `+${diffReps} rép${diffReps > 1 ? 's' : ''} au poids du corps (${last.topReps} réps vs ${prev.topReps})`
+            : `Volume en hausse (${last.totalReps} réps cumulées sur la séance)`;
+      } else if (diffWeight < 0 || (diffWeight === 0 && diffReps <= -2)) {
+        status = 'regression';
+        statusReason = `Moins de répétitions sur le top set (${last.topReps} réps vs ${prev.topReps} réps)`;
+      } else {
+        status = 'plateau';
+        statusReason = `Stable à ${last.topReps} réps au poids du corps (record : ${histMaxReps} réps)`;
+      }
+    }
+
+    targetWeight = last.topWeight;
+    if (last.topReps >= 12) {
+      targetReps = `${last.topReps + 1} réps (ou lest +10 lbs)`;
+      rationale = `Palier de 12 réps atteint : viser ${last.topReps + 1} réps au PDC ou ajouter +10 lbs de lest (8 réps).`;
+    } else {
+      targetReps = `${last.topReps + 1} réps`;
+      rationale = `Poids du corps : viser ${last.topReps + 1} réps sur la 1ère série (record actuel : ${histMaxReps} réps).`;
+    }
+  } else if (meta.mechanic === 'assisted') {
+    if (recent.length >= 2) {
+      const prev = recent[recent.length - 2];
+      const assistReduction = prev.topWeight - last.topWeight;
+      const lastEff = Math.max(5, userBodyweightLbs - last.topWeight);
+      const prevEff = Math.max(5, userBodyweightLbs - prev.topWeight);
+      const diffScore = lastEff * last.topReps - prevEff * prev.topReps;
+      const diffReps = last.topReps - prev.topReps;
+
+      if (
+        (assistReduction > 0 && last.topReps >= prev.topReps - 3) ||
+        (assistReduction === 0 && diffReps >= 1) ||
+        diffScore > 10
+      ) {
+        status = 'progression';
+        statusReason =
+          assistReduction > 0
+            ? `Assistance réduite de -${assistReduction} lbs (-${last.topWeight} lbs × ${last.topReps} réps)`
+            : `+${diffReps} rép${diffReps > 1 ? 's' : ''} avec -${last.topWeight} lbs d'assistance (${last.topReps} réps)`;
+      } else if (assistReduction < 0 || (assistReduction === 0 && diffReps <= -2)) {
+        status = 'regression';
+        statusReason = `Série à ${last.topReps} réps avec -${last.topWeight} lbs d'assistance (vs ${prev.topReps} réps)`;
+      } else {
+        status = 'plateau';
+        statusReason = `Stable avec -${last.topWeight} lbs d'assistance (${last.topReps} réps)`;
+      }
+    }
+
     if (last.topReps >= 10 && last.topWeight > 0) {
       const nextWeight = Math.max(0, last.topWeight - 5);
       targetWeight = nextWeight;
       targetReps = "6 à 8 réps";
       rationale = `Palier validé (${last.topReps} réps). Réduire l'assistance à ${nextWeight} lbs.`;
     } else {
+      targetWeight = last.topWeight;
       targetReps = `${last.topReps + 1} réps`;
-      rationale = `Viser +1 rép avec la même assistance (${last.topWeight} lbs).`;
+      rationale = `Viser +1 rép avec la même assistance (-${last.topWeight} lbs).`;
     }
-  } else if (last.topReps >= 12) {
-    targetWeight = last.topWeight + 5;
-    targetReps = "8 à 10 réps";
-    rationale = `Palier de 12 réps validé. Monter la charge de +5 lbs (${targetWeight} lbs).`;
   } else {
-    targetWeight = last.topWeight;
-    targetReps = `${Math.min(12, last.topReps + 1)} réps`;
-    rationale = `Conserver ${last.topWeight} lbs et chercher à battre ${last.topReps} réps sur la 1ère série.`;
+    // Standard weighted exercise
+    if (recent.length >= 2) {
+      const prev = recent[recent.length - 2];
+      const lastScore = last.topWeight * last.topReps;
+      const prevScore = prev.topWeight * prev.topReps;
+      const diffScore = lastScore - prevScore;
+      const diff1rm = last.estimated1rm - prev.estimated1rm;
+      const diffWeight = last.topWeight - prev.topWeight;
+      const diffReps = last.topReps - prev.topReps;
+
+      if (diffScore > 10 || diff1rm > 1.5 || (diffWeight === 0 && diffReps >= 1) || (diffWeight > 0 && diffReps >= 0)) {
+        status = 'progression';
+        statusReason = diffWeight > 0 && diffReps >= 0
+          ? `+${diffWeight} lbs sur le top set (${last.topWeight} lbs × ${last.topReps})`
+          : diffWeight === 0 && diffReps > 0
+          ? `+${diffReps} rép à même charge (${last.topReps} réps à ${last.topWeight} lbs)`
+          : `Volume du top set en hausse (+${Math.round(diffScore)} lbs en charge × réps)`;
+      } else if (diffScore < -30 || diff1rm < -3 || (diffWeight === 0 && diffReps <= -2) || diffWeight < -5) {
+        status = 'regression';
+        statusReason = `Légère baisse de performance (-${Math.abs(Math.round(diffScore))} lbs en charge × réps)`;
+      } else {
+        status = 'plateau';
+        statusReason = `Charge et réps identiques sur les ${Math.min(recent.length, 3)} dernières séances`;
+      }
+    }
+
+    if (last.topReps >= 12) {
+      targetWeight = last.topWeight + 5;
+      targetReps = "8 à 10 réps";
+      rationale = `Palier de 12 réps validé. Monter la charge de +5 lbs (${targetWeight} lbs).`;
+    } else {
+      targetWeight = last.topWeight;
+      targetReps = `${Math.min(12, last.topReps + 1)} réps`;
+      rationale = `Conserver ${last.topWeight} lbs et chercher à battre ${last.topReps} réps sur la 1ère série.`;
+    }
   }
 
   return {
     exerciseName,
     category: meta.category,
+    mechanic: meta.mechanic,
     primaryMuscle: meta.primaryMuscle,
     totalSessionsCount: totalCount,
     lastSessionDate: last.date,
     lastTopSetWeight: last.topWeight,
     lastTopSetReps: last.topReps,
     lastEstimated1rm: last.estimated1rm,
+    lastTopSetDurationSeconds: last.topDuration,
+    lastTotalDurationSeconds: last.totalDuration,
+    lastEffectiveLoadLbs,
     historicalMaxWeight: histMaxWeight,
     historicalMax1rm: histMax1rm,
+    historicalMaxDurationSeconds: histMaxDuration,
+    historicalMaxReps: histMaxReps,
     status,
     statusReason,
     nextSessionGoal: {

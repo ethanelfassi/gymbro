@@ -72,6 +72,8 @@ export interface WorkoutSession {
     topSetReps: number;
     topSet1rmLbs: number;
     topSetScoreLbs: number;
+    topSetDurationSeconds: number;
+    totalDurationSeconds: number;
   }[];
   totalEffectiveSets: number;
   totalVolumeLbs: number;
@@ -81,10 +83,12 @@ export interface WorkoutSession {
 export type TimePeriodFilter = 'all' | 'block_2026' | 'block_2024_2025' | '90d' | '30d';
 export type UnitSystem = 'lbs' | 'kg';
 
+export type GoalMetric = '1rm' | 'top_weight' | 'reps' | 'duration';
+
 export interface WorkoutGoal {
   id: string;
   exerciseName: string;
-  targetMetric: '1rm' | 'top_weight'; // 1RM estimé ou Charge brute
+  targetMetric: GoalMetric;
   targetWeightLbs: number;
   targetReps?: number; // e.g. 8 réps pour un objectif de série
   targetDate: string; // "YYYY-MM-DD", e.g. "2026-12-31"

@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import { WorkoutSession, UnitSystem, WorkoutGoal } from '@/lib/types';
 import { formatWeight, lbsToKg } from '@/lib/analytics';
-import { calculateGoalProgress } from '@/lib/goals';
+import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel } from '@/lib/goals';
 import {
   Activity,
   Clock,
@@ -377,7 +377,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       </div>
 
       {/* Interactive Calendar Section */}
-      <div className="p-5 rounded-lg bg-zinc-900/40 border border-zinc-800">
+      <div className="p-3 sm:p-5 rounded-lg bg-zinc-900/40 border border-zinc-800">
         
         {/* Calendar Header with Navigation */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
@@ -478,7 +478,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </div>
 
             {/* Days of week header */}
-            <div className="grid grid-cols-7 gap-1.5 text-center text-[11px] font-mono font-medium text-zinc-500 uppercase py-1">
+            <div className="grid grid-cols-7 gap-1 sm:gap-1.5 text-center text-[10px] sm:text-[11px] font-mono font-medium text-zinc-500 uppercase py-1">
               <div>Lun</div>
               <div>Mar</div>
               <div>Mer</div>
@@ -489,7 +489,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </div>
 
             {/* Monthly Calendar Grid */}
-            <div className="grid grid-cols-7 gap-1.5">
+            <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
               {monthData.days.map((day, idx) => {
                 const s = day.session;
 
@@ -497,7 +497,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                   return (
                     <div
                       key={idx}
-                      className="min-h-[72px] sm:min-h-[84px] p-2 rounded border border-zinc-900 bg-zinc-950/30 text-zinc-700 font-mono text-xs"
+                      className="min-h-[60px] sm:min-h-[84px] p-1 sm:p-2 min-w-0 overflow-hidden rounded border border-zinc-900 bg-zinc-950/30 text-zinc-700 font-mono text-[11px] sm:text-xs"
                     >
                       <span>{day.dayNumber}</span>
                     </div>
@@ -508,7 +508,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                   return (
                     <div
                       key={idx}
-                      className="min-h-[72px] sm:min-h-[84px] p-2 rounded border border-zinc-800/40 bg-zinc-950/60 text-zinc-500 font-mono text-xs flex flex-col justify-between hover:border-zinc-800 transition-colors"
+                      className="min-h-[60px] sm:min-h-[84px] p-1 sm:p-2 min-w-0 overflow-hidden rounded border border-zinc-800/40 bg-zinc-950/60 text-zinc-500 font-mono text-[11px] sm:text-xs flex flex-col justify-between hover:border-zinc-800 transition-colors"
                     >
                       <span>{day.dayNumber}</span>
                     </div>
@@ -536,21 +536,25 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                   <div
                     key={idx}
                     onClick={() => onSelectSession(s.id)}
-                    className={`min-h-[72px] sm:min-h-[84px] p-2 rounded border border-zinc-800 bg-zinc-900/90 cursor-pointer transition-all flex flex-col justify-between group ${cellHoverBorder}`}
+                    className={`min-h-[60px] sm:min-h-[84px] p-1 sm:p-2 min-w-0 overflow-hidden rounded border border-zinc-800 bg-zinc-900/90 cursor-pointer transition-all flex flex-col justify-between group ${cellHoverBorder}`}
                     title={`Cliquer pour ouvrir la séance : ${s.detectedType} (${s.durationMinutes} min, ${s.exercises.length} exercices)`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-xs font-semibold text-zinc-200">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-0.5 min-w-0">
+                      <span className="font-mono text-[11px] sm:text-xs font-semibold text-zinc-200 leading-none">
                         {day.dayNumber}
                       </span>
                       <span
-                        className={`text-[9px] font-mono px-1.5 py-0.2 rounded border font-semibold ${badgeStyle}`}
+                        className={`text-[8px] sm:text-[9px] font-mono px-1 sm:px-1.5 py-0 rounded border font-semibold truncate max-w-full text-center leading-tight ${badgeStyle}`}
                       >
                         {s.detectedType}
                       </span>
                     </div>
 
-                    <div className="text-[10px] font-mono text-zinc-400 space-y-0.5 mt-1">
+                    <div className="sm:hidden text-[9px] font-mono text-zinc-400 truncate mt-0.5">
+                      {s.durationMinutes}m
+                    </div>
+
+                    <div className="hidden sm:block text-[10px] font-mono text-zinc-400 space-y-0.5 mt-1">
                       <div className="text-zinc-300 truncate">
                         {s.durationMinutes}m &bull; {s.exercises.length} exos
                       </div>
@@ -626,18 +630,18 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {goalPreviews.slice(0, 3).map((gp) => (
+            {goalPreviews.slice(0, 6).map((gp) => (
               <div
                 key={gp.goal.id}
                 onClick={() => onSelectExercise(gp.goal.exerciseName)}
                 className="p-3 rounded-md bg-zinc-900/60 border border-zinc-800 hover:border-zinc-700 transition-colors cursor-pointer space-y-2"
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="font-medium text-xs text-zinc-200 truncate">
                     {gp.goal.exerciseName}
                   </span>
                   <span
-                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${
                       gp.status === 'achieved'
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
                         : gp.status === 'on_track'
@@ -654,8 +658,10 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 <div className="space-y-1">
                   <div className="flex justify-between text-[11px] font-mono text-zinc-400">
                     <span>
-                      {formatWeight(gp.currentValueLbs, unit)} &rarr;{' '}
-                      <span className="text-zinc-200 font-semibold">{formatWeight(gp.targetValueLbs, unit)}</span>
+                      {formatGoalValue(gp.currentValueLbs, gp.goal.targetMetric, unit)} &rarr;{' '}
+                      <span className="text-zinc-200 font-semibold">
+                        {formatGoalValue(gp.targetValueLbs, gp.goal.targetMetric, unit)}
+                      </span>
                     </span>
                     <span className="text-zinc-300 font-semibold">{gp.progressPercent}%</span>
                   </div>
@@ -674,7 +680,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 </div>
 
                 <div className="flex justify-between text-[10px] font-mono text-zinc-500">
-                  <span>{gp.goal.targetMetric === '1rm' ? '1RM' : `Top Set (${gp.goal.targetReps || 1}r)`}</span>
+                  <span>{formatGoalMetricLabel(gp.goal)}</span>
                   <span>{gp.daysRemaining >= 0 ? `${gp.daysRemaining} j restants` : 'Dépassé'}</span>
                 </div>
               </div>
@@ -764,7 +770,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                     <ArrowUpRight className="w-3.5 h-3.5 text-zinc-500" />
                   </div>
                   <div className="text-[11px] text-zinc-500 font-mono mt-0.5">
-                    {pr.date} &bull; Série : {formatWeight(pr.weightLbs, unit)} &times; {pr.reps} réps
+                    {pr.date} &bull; Série : {pr.weightLbs > 0 ? formatWeight(pr.weightLbs, unit) : 'PDC'} &times; {pr.reps} réps
                   </div>
                 </div>
 

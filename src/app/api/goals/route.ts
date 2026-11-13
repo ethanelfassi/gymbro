@@ -12,7 +12,10 @@ function isValidGoal(value: unknown): value is WorkoutGoal {
     g.id.trim().length > 0 &&
     typeof g.exerciseName === 'string' &&
     g.exerciseName.trim().length > 0 &&
-    (g.targetMetric === '1rm' || g.targetMetric === 'top_weight') &&
+    (g.targetMetric === '1rm' ||
+      g.targetMetric === 'top_weight' ||
+      g.targetMetric === 'reps' ||
+      g.targetMetric === 'duration') &&
     typeof g.targetWeightLbs === 'number' &&
     Number.isFinite(g.targetWeightLbs) &&
     g.targetWeightLbs > 0 &&

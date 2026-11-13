@@ -2,8 +2,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { WorkoutSession, UnitSystem, WorkoutGoal } from '@/lib/types';
-import { formatWeight, lbsToKg } from '@/lib/analytics';
-import { calculateGoalProgress } from '@/lib/goals';
+import { formatWeight, lbsToKg, estimate1rm } from '@/lib/analytics';
+import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel } from '@/lib/goals';
 import { getExerciseMeta } from '@/lib/taxonomy';
 import { Search, Trophy, History, FileText, Target } from 'lucide-react';
 import {
@@ -94,10 +94,14 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
     const data: {
       date: string;
       topWeight: number;
+      rawTopWeight: number;
       topReps: number;
       topSetScore: number;
       est1rm: number;
       volume: number;
+      topDuration: number;
+      totalDuration: number;
+      workingSetsCount: number;
       sets: typeof sessions[0]['exercises'][0]['sets'];
     }[] = [];
 
@@ -105,25 +109,90 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
       const ex = s.exercises.find((e) => e.name === currentEx);
       if (!ex || ex.sets.length === 0) continue;
 
+      const workingSets = ex.sets.filter((st) => !st.isWarmup);
+      const setsToUse = workingSets.length > 0 ? workingSets : ex.sets;
+      const topDuration = ex.topSetDurationSeconds || Math.max(0, ...setsToUse.map((st) => st.durationSeconds));
+      const totalDuration = ex.totalDurationSeconds || setsToUse.reduce((acc, st) => acc + st.durationSeconds, 0);
+
+      if (currentMeta.mechanic === 'duration') {
+        data.push({
+          date: s.dateStr,
+          topWeight: 0,
+          rawTopWeight: 0,
+          topReps: ex.topSetReps,
+          topSetScore: topDuration,
+          est1rm: topDuration,
+          volume: totalDuration,
+          topDuration,
+          totalDuration,
+          workingSetsCount: setsToUse.length,
+          sets: ex.sets,
+        });
+        continue;
+      }
+
       let est1rm = ex.topSet1rmLbs;
       let topWeight = ex.topSetWeightLbs;
+      let rawVolumeLbs = ex.totalVolumeLbs;
 
-      // Handle assisted exercises with bodyweight
-      if (currentMeta.mechanic === 'assisted' && useEffectiveLoad) {
-        topWeight = Math.max(0, bodyweightLbs - ex.topSetWeightLbs);
-        est1rm = Math.round(topWeight * (1 + ex.topSetReps / 30));
+      if (currentMeta.mechanic === 'assisted') {
+        if (useEffectiveLoad) {
+          topWeight = Math.max(5, bodyweightLbs - ex.topSetWeightLbs);
+          est1rm = estimate1rm(topWeight, ex.topSetReps);
+          rawVolumeLbs = setsToUse.reduce(
+            (acc, st) => acc + Math.max(5, bodyweightLbs - st.weightLbs) * st.reps,
+            0
+          );
+        } else {
+          topWeight = ex.topSetWeightLbs;
+          est1rm = estimate1rm(topWeight, ex.topSetReps);
+          rawVolumeLbs = setsToUse.reduce((acc, st) => acc + st.weightLbs * st.reps, 0);
+        }
+      } else if (currentMeta.mechanic === 'bodyweight') {
+        if (useEffectiveLoad) {
+          topWeight = bodyweightLbs + ex.topSetWeightLbs;
+          est1rm = estimate1rm(topWeight, ex.topSetReps);
+          rawVolumeLbs = setsToUse.reduce(
+            (acc, st) => acc + (bodyweightLbs + st.weightLbs) * st.reps,
+            0
+          );
+        } else {
+          topWeight = ex.topSetWeightLbs;
+          est1rm = topWeight > 0 ? estimate1rm(topWeight, ex.topSetReps) : ex.topSetReps;
+          rawVolumeLbs = setsToUse.reduce(
+            (acc, st) => acc + (st.weightLbs > 0 ? st.weightLbs * st.reps : st.reps),
+            0
+          );
+        }
       }
 
       const displayWeight = unit === 'kg' ? lbsToKg(topWeight) : topWeight;
-      const topSetScore = Math.round(displayWeight * ex.topSetReps * 10) / 10;
+      const topSetScore =
+        displayWeight > 0
+          ? Math.round(displayWeight * ex.topSetReps * 10) / 10
+          : ex.topSetReps;
 
       data.push({
         date: s.dateStr,
         topWeight: displayWeight,
+        rawTopWeight: ex.topSetWeightLbs,
         topReps: ex.topSetReps,
         topSetScore,
-        est1rm: unit === 'kg' ? lbsToKg(est1rm) : est1rm,
-        volume: unit === 'kg' ? lbsToKg(ex.totalVolumeLbs) : ex.totalVolumeLbs,
+        est1rm:
+          currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad && ex.topSetWeightLbs === 0
+            ? ex.topSetReps
+            : unit === 'kg'
+            ? lbsToKg(est1rm)
+            : est1rm,
+        volume:
+          currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad && ex.topSetWeightLbs === 0
+            ? rawVolumeLbs
+            : unit === 'kg'
+            ? lbsToKg(rawVolumeLbs)
+            : rawVolumeLbs,
+        topDuration,
+        totalDuration,
+        workingSetsCount: setsToUse.length,
         sets: ex.sets,
       });
     }
@@ -131,27 +200,41 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
     return data;
   }, [sessions, currentEx, currentMeta, useEffectiveLoad, bodyweightLbs, unit]);
 
-  // Rep PRs calculation (1, 3, 5, 8, 10, 12 reps) - ranked by Charge * Réps
+  // Rep PRs calculation (1, 3, 5, 6, 8, 10, 12, 15 reps) - ranked by Charge * Réps
   const repRecords = useMemo(() => {
     const buckets = [1, 3, 5, 6, 8, 10, 12, 15];
-    const bestByRep = new Map<number, { weight: number; reps: number; score: number; date: string }>();
+    const bestByRep = new Map<
+      number,
+      { weight: number; rawWeight: number; reps: number; score: number; date: string }
+    >();
 
     for (const d of exerciseData) {
       for (const st of d.sets) {
         if (st.isWarmup || st.reps <= 0) continue;
         let w = st.weightLbs;
-        if (currentMeta.mechanic === 'assisted' && useEffectiveLoad) {
-          w = Math.max(0, bodyweightLbs - st.weightLbs);
+        let scoreWeight = st.weightLbs;
+        if (currentMeta.mechanic === 'assisted') {
+          scoreWeight = Math.max(5, bodyweightLbs - st.weightLbs);
+          w = useEffectiveLoad ? scoreWeight : st.weightLbs;
+        } else if (currentMeta.mechanic === 'bodyweight') {
+          scoreWeight = bodyweightLbs + st.weightLbs;
+          w = useEffectiveLoad ? scoreWeight : st.weightLbs;
         }
 
-        const score = w * st.reps;
+        const score = scoreWeight * st.reps;
 
         // Find nearest bucket
         for (const b of buckets) {
           if (st.reps >= b) {
             const current = bestByRep.get(b);
             if (!current || score > current.score || (score === current.score && w > current.weight)) {
-              bestByRep.set(b, { weight: w, reps: st.reps, score, date: d.date });
+              bestByRep.set(b, {
+                weight: w,
+                rawWeight: st.weightLbs,
+                reps: st.reps,
+                score,
+                date: d.date,
+              });
             }
           }
         }
@@ -163,6 +246,41 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
       record: bestByRep.get(b),
     }));
   }, [exerciseData, currentMeta, useEffectiveLoad, bodyweightLbs]);
+
+  // Duration records (for duration exercises like Dead Hang)
+  const durationRecords = useMemo(() => {
+    let maxDuration = 0;
+    let maxDurationDate = '';
+    let maxSessionTotal = 0;
+    let maxSessionDate = '';
+    let setsOver30s = 0;
+    let totalCumulativeSec = 0;
+
+    for (const d of exerciseData) {
+      if (d.totalDuration > maxSessionTotal) {
+        maxSessionTotal = d.totalDuration;
+        maxSessionDate = d.date;
+      }
+      for (const st of d.sets) {
+        if (st.isWarmup) continue;
+        totalCumulativeSec += st.durationSeconds;
+        if (st.durationSeconds >= 30) setsOver30s++;
+        if (st.durationSeconds > maxDuration) {
+          maxDuration = st.durationSeconds;
+          maxDurationDate = d.date;
+        }
+      }
+    }
+
+    return {
+      maxDuration,
+      maxDurationDate,
+      maxSessionTotal,
+      maxSessionDate,
+      setsOver30s,
+      totalCumulativeSec,
+    };
+  }, [exerciseData]);
 
   // Extract unique notes for this exercise (including machine notes from any log)
   const exerciseNotes = useMemo(() => {
@@ -188,9 +306,31 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
     return calculateGoalProgress(activeGoal, sessions, bodyweightLbs);
   }, [activeGoal, sessions, bodyweightLbs]);
 
+  // Active chart data key
+  const chartDataKey = useMemo(() => {
+    if (currentMeta.mechanic === 'duration') {
+      if (metricView === '1rm') return 'topDuration' as const;
+      if (metricView === 'top_set') return 'totalDuration' as const;
+      return 'workingSetsCount' as const;
+    }
+    if (metricView === '1rm') return 'est1rm' as const;
+    if (metricView === 'top_set') return 'topSetScore' as const;
+    return 'volume' as const;
+  }, [currentMeta.mechanic, metricView]);
+
   // Target value for chart reference line if metric aligns
   const targetValueForChart = useMemo(() => {
     if (!activeGoal) return null;
+    if (currentMeta.mechanic === 'duration' && activeGoal.targetMetric === 'duration') {
+      if (metricView === '1rm') return activeGoal.targetWeightLbs;
+      return null;
+    }
+    if (activeGoal.targetMetric === 'reps' && !useEffectiveLoad) {
+      if (metricView === 'top_set' || metricView === '1rm') {
+        return activeGoal.targetWeightLbs;
+      }
+      return null;
+    }
     if (metricView === '1rm' && activeGoal.targetMetric === '1rm') {
       return unit === 'kg' ? lbsToKg(activeGoal.targetWeightLbs) : activeGoal.targetWeightLbs;
     }
@@ -199,21 +339,20 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
       return Math.round(load * (activeGoal.targetReps || 1) * 10) / 10;
     }
     return null;
-  }, [activeGoal, metricView, unit]);
+  }, [activeGoal, metricView, unit, currentMeta.mechanic, useEffectiveLoad]);
 
   const yDomain = useMemo(() => {
     if (exerciseData.length === 0) return ['auto', 'auto'];
-    const key = metricView === '1rm' ? 'est1rm' : (metricView === 'top_set' ? 'topSetScore' : 'volume');
-    const values = exerciseData.map((d) => d[key]);
+    const values = exerciseData.map((d) => d[chartDataKey]);
     let minVal = Math.min(...values);
     let maxVal = Math.max(...values);
     if (targetValueForChart !== null) {
       minVal = Math.min(minVal, targetValueForChart);
       maxVal = Math.max(maxVal, targetValueForChart);
     }
-    const padding = (maxVal - minVal) * 0.1 || 10;
+    const padding = (maxVal - minVal) * 0.1 || 5;
     return [Math.max(0, Math.floor(minVal - padding)), Math.ceil(maxVal + padding)];
-  }, [exerciseData, metricView, targetValueForChart]);
+  }, [exerciseData, chartDataKey, targetValueForChart]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -288,7 +427,7 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
         {/* Header of Exercise */}
         <div className="p-4 rounded-lg bg-zinc-900/60 border border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-semibold text-zinc-100">{currentEx}</h2>
               <span className="text-xs font-mono px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300">
                 {currentMeta.category} &bull; {currentMeta.primaryMuscle}
@@ -299,8 +438,8 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Assisted toggle */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Assisted / Bodyweight toggle */}
             {currentMeta.mechanic === 'assisted' && (
               <button
                 onClick={() => setUseEffectiveLoad(!useEffectiveLoad)}
@@ -314,25 +453,46 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                 Charge nette (PDC - Assistance)
               </button>
             )}
+            {currentMeta.mechanic === 'bodyweight' && (
+              <button
+                onClick={() => setUseEffectiveLoad(!useEffectiveLoad)}
+                className={`px-2.5 py-1 rounded text-xs font-mono border transition-colors ${
+                  useEffectiveLoad
+                    ? 'bg-zinc-800 border-zinc-700 text-zinc-200'
+                    : 'bg-zinc-950 border-zinc-800 text-zinc-500'
+                }`}
+                title="Inclure le poids de corps dans le calcul de charge et de 1RM"
+              >
+                Charge totale (PDC inclus)
+              </button>
+            )}
 
             {/* Metric Switcher */}
-            <div className="inline-flex rounded-md bg-zinc-950 border border-zinc-800 p-0.5 text-xs font-mono">
+            <div className="inline-flex flex-wrap rounded-md bg-zinc-950 border border-zinc-800 p-0.5 text-xs font-mono">
               <button
                 onClick={() => setMetricView('1rm')}
                 className={`px-2 py-1 rounded ${
                   metricView === '1rm' ? 'bg-zinc-800 text-zinc-100 font-medium' : 'text-zinc-400'
                 }`}
               >
-                1RM Estimé
+                {currentMeta.mechanic === 'duration' ? 'Meilleure Série (sec)' : '1RM Estimé'}
               </button>
               <button
                 onClick={() => setMetricView('top_set')}
                 className={`px-2 py-1 rounded ${
                   metricView === 'top_set' ? 'bg-zinc-800 text-zinc-100 font-medium' : 'text-zinc-400'
                 }`}
-                title="Top Set trié par Charge × Réps"
+                title={
+                  currentMeta.mechanic === 'duration'
+                    ? 'Durée cumulée sur toute la séance'
+                    : 'Top Set trié par Charge × Réps'
+                }
               >
-                Top Set (Charge &times; Réps)
+                {currentMeta.mechanic === 'duration'
+                  ? 'Temps Cumulé (sec)'
+                  : currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad
+                  ? 'Top Set (Réps)'
+                  : 'Top Set (Charge × Réps)'}
               </button>
               <button
                 onClick={() => setMetricView('volume')}
@@ -340,7 +500,7 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                   metricView === 'volume' ? 'bg-zinc-800 text-zinc-100 font-medium' : 'text-zinc-400'
                 }`}
               >
-                Volume Total
+                {currentMeta.mechanic === 'duration' ? 'Séries Effectives' : 'Volume Total'}
               </button>
             </div>
           </div>
@@ -350,10 +510,10 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
         {activeGoal && goalProgress && (
           <div className="p-4 rounded-lg bg-zinc-900/80 border border-zinc-800 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Target className="w-4 h-4 text-emerald-400" />
+              <div className="flex flex-wrap items-center gap-2">
+                <Target className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span className="text-xs font-mono font-semibold uppercase tracking-wider text-zinc-200">
-                  Objectif Actif : {activeGoal.targetMetric === '1rm' ? '1RM Estimé' : `Top Set (${activeGoal.targetReps || 1} réps)`} &bull; {formatWeight(activeGoal.targetWeightLbs, unit)}
+                  Objectif Actif : {formatGoalMetricLabel(activeGoal)} &bull; {formatGoalValue(activeGoal.targetWeightLbs, activeGoal.targetMetric, unit)}
                 </span>
                 {activeGoal.note && (
                   <span className="text-[11px] text-zinc-400 font-mono">
@@ -361,7 +521,7 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span
                   className={`text-[11px] font-mono px-2 py-0.5 rounded border ${
                     goalProgress.status === 'achieved'
@@ -387,14 +547,14 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
             <div className="space-y-1.5">
               <div className="flex justify-between items-center text-xs font-mono">
                 <span className="text-zinc-400">
-                  Actuel : <span className="text-zinc-100 font-semibold">{formatWeight(goalProgress.currentValueLbs, unit)}</span>
-                  {' '}/ Cible : <span className="text-zinc-100 font-semibold">{formatWeight(goalProgress.targetValueLbs, unit)}</span>
+                  Actuel : <span className="text-zinc-100 font-semibold">{formatGoalValue(goalProgress.currentValueLbs, activeGoal.targetMetric, unit)}</span>
+                  {' '}/ Cible : <span className="text-zinc-100 font-semibold">{formatGoalValue(goalProgress.targetValueLbs, activeGoal.targetMetric, unit)}</span>
                 </span>
                 <span className="font-semibold text-zinc-200">
                   {goalProgress.progressPercent}%
                   {goalProgress.remainingWeightLbs > 0 && (
                     <span className="text-zinc-500 font-normal ml-1">
-                      (reste {formatWeight(goalProgress.remainingWeightLbs, unit)})
+                      (reste {formatGoalValue(goalProgress.remainingWeightLbs, activeGoal.targetMetric, unit)})
                     </span>
                   )}
                 </span>
@@ -444,34 +604,52 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                           <div className="font-semibold text-zinc-200 border-b border-zinc-800 pb-1">
                             Séance du {label}
                           </div>
-                          {metricView === 'top_set' ? (
+                          {currentMeta.mechanic === 'duration' ? (
                             <>
                               <div className="text-zinc-300">
-                                Top Set : <span className="font-semibold text-zinc-100">{item.topWeight} {unit} &times; {item.topReps} réps</span>
+                                Meilleure série : <span className="font-semibold text-zinc-100">{item.topDuration} sec</span>
                               </div>
                               <div className="text-[11px] text-zinc-400">
-                                Score (Charge &times; Réps) : <span className="font-semibold text-emerald-400">{item.topSetScore} {unit}</span>
+                                Temps cumulé : <span className="font-semibold text-emerald-400">{item.totalDuration} sec</span>
                               </div>
                               <div className="text-[10px] text-zinc-500">
-                                1RM Estimé : {item.est1rm} {unit}
+                                Séries : {item.workingSetsCount}
+                              </div>
+                            </>
+                          ) : metricView === 'top_set' ? (
+                            <>
+                              <div className="text-zinc-300">
+                                Top Set :{' '}
+                                <span className="font-semibold text-zinc-100">
+                                  {item.topWeight > 0 ? `${item.topWeight} ${unit}` : 'PDC'} &times; {item.topReps} réps
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-zinc-400">
+                                Score (Charge &times; Réps) : <span className="font-semibold text-emerald-400">{item.topSetScore} {item.topWeight > 0 ? unit : 'réps'}</span>
+                              </div>
+                              <div className="text-[10px] text-zinc-500">
+                                1RM Estimé : {item.est1rm} {item.topWeight > 0 ? unit : 'réps'}
                               </div>
                             </>
                           ) : metricView === '1rm' ? (
                             <>
                               <div className="text-zinc-300">
-                                1RM Estimé : <span className="font-semibold text-zinc-100">{item.est1rm} {unit}</span>
+                                {item.topWeight > 0 ? '1RM Estimé' : 'Top Réps'} :{' '}
+                                <span className="font-semibold text-zinc-100">
+                                  {item.est1rm} {item.topWeight > 0 ? unit : 'réps'}
+                                </span>
                               </div>
                               <div className="text-[11px] text-zinc-400">
-                                Top Set : {item.topWeight} {unit} &times; {item.topReps} réps
+                                Top Set : {item.topWeight > 0 ? `${item.topWeight} ${unit}` : 'PDC'} &times; {item.topReps} réps
                               </div>
                             </>
                           ) : (
                             <>
                               <div className="text-zinc-300">
-                                Volume séance : <span className="font-semibold text-zinc-100">{item.volume} {unit}</span>
+                                Volume séance : <span className="font-semibold text-zinc-100">{item.volume} {item.topWeight > 0 ? unit : 'réps'}</span>
                               </div>
                               <div className="text-[11px] text-zinc-400">
-                                Top Set : {item.topWeight} {unit} &times; {item.topReps}
+                                Top Set : {item.topWeight > 0 ? `${item.topWeight} ${unit}` : 'PDC'} &times; {item.topReps}
                               </div>
                             </>
                           )}
@@ -481,7 +659,7 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                   />
                   <Line
                     type="monotone"
-                    dataKey={metricView === '1rm' ? 'est1rm' : (metricView === 'top_set' ? 'topSetScore' : 'volume')}
+                    dataKey={chartDataKey}
                     stroke="#38BDF8"
                     strokeWidth={2}
                     dot={{ fill: '#38BDF8', r: 3 }}
@@ -493,7 +671,13 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                       stroke="#F59E0B"
                       strokeDasharray="4 4"
                       label={{
-                        value: `Cible: ${targetValueForChart} ${unit}`,
+                        value: `Cible: ${targetValueForChart} ${
+                          currentMeta.mechanic === 'duration'
+                            ? 'sec'
+                            : activeGoal?.targetMetric === 'reps' && !useEffectiveLoad
+                            ? 'réps'
+                            : unit
+                        }`,
                         fill: '#F59E0B',
                         fontSize: 10,
                         fontFamily: 'monospace',
@@ -531,37 +715,86 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
           </div>
         )}
 
-        {/* Rep PRs Table */}
+        {/* Rep PRs / Duration PRs Table */}
         <div className="p-5 rounded-lg bg-zinc-900/40 border border-zinc-800">
           <div className="flex items-center gap-2 mb-3">
             <Trophy className="w-4 h-4 text-zinc-400" />
             <h3 className="text-xs font-mono font-semibold uppercase tracking-wider text-zinc-200">
-              Tableau des Records Personnels par Palier de Répétitions
+              {currentMeta.mechanic === 'duration'
+                ? 'Records de Maintien & Endurance'
+                : 'Tableau des Records Personnels par Palier de Répétitions'}
             </h3>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-xs">
-            {repRecords.map((r) => (
-              <div
-                key={r.repCount}
-                className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80"
-              >
-                <div className="text-[11px] text-zinc-500">{r.repCount} RM</div>
-                {r.record ? (
-                  <div className="mt-1">
-                    <div className="font-semibold text-zinc-100">
-                      {unit === 'kg' ? `${lbsToKg(r.record.weight)} kg` : `${r.record.weight} lbs`}
-                    </div>
-                    <div className="text-[10px] text-zinc-500 mt-0.5">
-                      {r.record.reps} réps &bull; {r.record.date.slice(2)}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-zinc-600 mt-1">&mdash;</div>
-                )}
+          {currentMeta.mechanic === 'duration' ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-xs">
+              <div className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80">
+                <div className="text-[11px] text-zinc-500">Record Absolu</div>
+                <div className="mt-1 font-semibold text-zinc-100">
+                  {durationRecords.maxDuration} sec
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  {durationRecords.maxDurationDate ? durationRecords.maxDurationDate.slice(2) : '—'}
+                </div>
               </div>
-            ))}
-          </div>
+              <div className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80">
+                <div className="text-[11px] text-zinc-500">Cumul Séance Max</div>
+                <div className="mt-1 font-semibold text-zinc-100">
+                  {durationRecords.maxSessionTotal} sec
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  {durationRecords.maxSessionDate ? durationRecords.maxSessionDate.slice(2) : '—'}
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80">
+                <div className="text-[11px] text-zinc-500">Séries &ge; 30s</div>
+                <div className="mt-1 font-semibold text-zinc-100">
+                  {durationRecords.setsOver30s}
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  Total : {durationRecords.totalCumulativeSec}s
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80">
+                <div className="text-[11px] text-zinc-500">Palier 60 sec</div>
+                <div className="mt-1 font-semibold text-zinc-100">
+                  {Math.min(100, Math.round((durationRecords.maxDuration / 60) * 100))}%
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  {durationRecords.maxDuration >= 60 ? 'Validé' : `Reste ${60 - durationRecords.maxDuration}s`}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-xs">
+              {repRecords.map((r) => (
+                <div
+                  key={r.repCount}
+                  className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80"
+                >
+                  <div className="text-[11px] text-zinc-500">{r.repCount} RM</div>
+                  {r.record ? (
+                    <div className="mt-1">
+                      <div className="font-semibold text-zinc-100">
+                        {currentMeta.mechanic === 'bodyweight' && r.record.rawWeight === 0
+                          ? useEffectiveLoad
+                            ? `PDC (${unit === 'kg' ? `${lbsToKg(r.record.weight)} kg` : `${r.record.weight} lbs`})`
+                            : 'PDC'
+                          : unit === 'kg'
+                          ? `${lbsToKg(r.record.weight)} kg`
+                          : `${r.record.weight} lbs`}
+                      </div>
+                      <div className="text-[10px] text-zinc-500 mt-0.5">
+                        {r.record.reps} réps &bull; {r.record.date.slice(2)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-zinc-600 mt-1">&mdash;</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Complete Historical Sessions for this Exercise */}
@@ -579,11 +812,31 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                 key={idx}
                 className="p-3 rounded bg-zinc-900/60 border border-zinc-800/70 text-xs font-mono space-y-1.5"
               >
-                <div className="flex items-center justify-between text-zinc-400 border-b border-zinc-800/50 pb-1.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-zinc-400 border-b border-zinc-800/50 pb-1.5">
                   <span className="font-semibold text-zinc-200">{item.date}</span>
-                  <div className="flex items-center gap-3 text-[11px]">
-                    <span>Top Set : <strong className="text-zinc-200">{item.topWeight} {unit}</strong> &times; {item.topReps} <span className="text-zinc-500">({item.topSetScore} {unit})</span></span>
-                    <span>1RM: <strong className="text-zinc-200">{item.est1rm} {unit}</strong></span>
+                  <div className="flex flex-wrap items-center gap-3 text-[11px]">
+                    {currentMeta.mechanic === 'duration' ? (
+                      <>
+                        <span>Meilleure série : <strong className="text-zinc-200">{item.topDuration}s</strong></span>
+                        <span>Cumul : <strong className="text-zinc-200">{item.totalDuration}s</strong></span>
+                      </>
+                    ) : (
+                      <>
+                        <span>
+                          Top Set :{' '}
+                          <strong className="text-zinc-200">
+                            {item.topWeight > 0 ? `${item.topWeight} ${unit}` : 'PDC'}
+                          </strong>{' '}
+                          &times; {item.topReps}{' '}
+                          {item.topWeight > 0 && (
+                            <span className="text-zinc-500">({item.topSetScore} {unit})</span>
+                          )}
+                        </span>
+                        <span>
+                          1RM: <strong className="text-zinc-200">{item.est1rm} {item.topWeight > 0 ? unit : 'réps'}</strong>
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -598,8 +851,16 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                       }`}
                       title={st.isWarmup ? 'Série d’échauffement' : 'Série de travail'}
                     >
-                      S{st.setIndex + 1}: {unit === 'kg' ? `${lbsToKg(st.weightLbs)}kg` : `${st.weightLbs}lbs`} &times; {st.reps}
-                      {st.durationSeconds > 0 ? ` (${st.durationSeconds}s)` : ''}
+                      S{st.setIndex + 1}:{' '}
+                      {st.durationSeconds > 0 ? (
+                        `${st.durationSeconds}s`
+                      ) : currentMeta.mechanic === 'bodyweight' && st.weightLbs === 0 ? (
+                        `PDC × ${st.reps}`
+                      ) : currentMeta.mechanic === 'assisted' ? (
+                        `-${unit === 'kg' ? `${lbsToKg(st.weightLbs)}kg` : `${st.weightLbs}lbs`} × ${st.reps}`
+                      ) : (
+                        `${unit === 'kg' ? `${lbsToKg(st.weightLbs)}kg` : `${st.weightLbs}lbs`} × ${st.reps}`
+                      )}
                     </span>
                   ))}
                 </div>

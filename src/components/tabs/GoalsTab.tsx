@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { WorkoutGoal, WorkoutSession, UnitSystem } from '@/lib/types';
-import { calculateGoalProgress } from '@/lib/goals';
-import { formatWeight, lbsToKg, kgToLbs } from '@/lib/analytics';
+import { WorkoutGoal, WorkoutSession, UnitSystem, GoalMetric } from '@/lib/types';
+import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel } from '@/lib/goals';
+import { lbsToKg, kgToLbs } from '@/lib/analytics';
 import {
   Target,
   Plus,
@@ -42,7 +42,7 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
 
   // Form State
   const [formExName, setFormExName] = useState<string>('');
-  const [formMetric, setFormMetric] = useState<'1rm' | 'top_weight'>('1rm');
+  const [formMetric, setFormMetric] = useState<GoalMetric>('1rm');
   const [formWeight, setFormWeight] = useState<string>('150');
   const [formReps, setFormReps] = useState<string>('8');
   const [formDate, setFormDate] = useState<string>('2026-12-31');
@@ -93,13 +93,14 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
   };
 
   const openEditModal = (goal: WorkoutGoal) => {
+    const isWeightMetric = goal.targetMetric === '1rm' || goal.targetMetric === 'top_weight';
     setEditingGoal(goal);
     setFormExName(goal.exerciseName);
     setFormMetric(goal.targetMetric);
-    setFormWeight(String(unit === 'kg' ? lbsToKg(goal.targetWeightLbs) : goal.targetWeightLbs));
+    setFormWeight(String(isWeightMetric && unit === 'kg' ? lbsToKg(goal.targetWeightLbs) : goal.targetWeightLbs));
     setFormReps(String(goal.targetReps || 8));
     setFormDate(goal.targetDate);
-    setFormStartWeight(String(unit === 'kg' ? lbsToKg(goal.startWeightLbs) : goal.startWeightLbs));
+    setFormStartWeight(String(isWeightMetric && unit === 'kg' ? lbsToKg(goal.startWeightLbs) : goal.startWeightLbs));
     setFormNote(goal.note || '');
     setIsModalOpen(true);
   };
@@ -111,10 +112,12 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
 
     if (isNaN(rawTargetWeight) || rawTargetWeight <= 0) return;
 
-    // Convert to lbs if entered in kg
-    const targetWeightLbs = unit === 'kg' ? kgToLbs(rawTargetWeight) : rawTargetWeight;
+    const isWeightMetric = formMetric === '1rm' || formMetric === 'top_weight';
+
+    // Convert to lbs only for weight-based metrics if entered in kg
+    const targetWeightLbs = isWeightMetric && unit === 'kg' ? kgToLbs(rawTargetWeight) : rawTargetWeight;
     const startWeightLbs = !isNaN(rawStartWeight)
-      ? (unit === 'kg' ? kgToLbs(rawStartWeight) : rawStartWeight)
+      ? (isWeightMetric && unit === 'kg' ? kgToLbs(rawStartWeight) : rawStartWeight)
       : targetWeightLbs * 0.8;
 
     const goalToSave: WorkoutGoal = {
@@ -205,10 +208,11 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
         ) : (
           progressList.map((item) => {
             const g = item.goal;
-            const targetDisplay = unit === 'kg' ? `${lbsToKg(g.targetWeightLbs)} kg` : `${g.targetWeightLbs} lbs`;
-            const currentDisplay = unit === 'kg' ? `${lbsToKg(item.currentValueLbs)} kg` : `${item.currentValueLbs} lbs`;
-            const startDisplay = unit === 'kg' ? `${lbsToKg(item.startValueLbs)} kg` : `${item.startValueLbs} lbs`;
-            const remainingDisplay = unit === 'kg' ? `${lbsToKg(item.remainingWeightLbs)} kg` : `${item.remainingWeightLbs} lbs`;
+            const targetDisplay = formatGoalValue(g.targetWeightLbs, g.targetMetric, unit);
+            const currentDisplay = formatGoalValue(item.currentValueLbs, g.targetMetric, unit);
+            const startDisplay = formatGoalValue(item.startValueLbs, g.targetMetric, unit);
+            const remainingDisplay = formatGoalValue(item.remainingWeightLbs, g.targetMetric, unit);
+            const metricLabel = formatGoalMetricLabel(g);
 
             let badgeStyle = 'bg-zinc-800 text-zinc-300 border-zinc-700';
             if (item.status === 'achieved') {
@@ -267,7 +271,7 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
                       {targetDisplay}
                     </span>
                     <span className="text-[10px] text-zinc-500 ml-1">
-                      {g.targetMetric === '1rm' ? '(1RM)' : `(${g.targetReps || 8} réps)`}
+                      ({metricLabel})
                     </span>
                   </div>
 
@@ -396,20 +400,46 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
                         : 'bg-zinc-950 border-zinc-800 text-zinc-400'
                     }`}
                   >
-                    Top Set (Charge directe)
+                    Top Set (Charge)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormMetric('reps')}
+                    className={`p-2 rounded border text-center transition-colors ${
+                      formMetric === 'reps'
+                        ? 'bg-zinc-800 border-zinc-700 text-zinc-100 font-semibold'
+                        : 'bg-zinc-950 border-zinc-800 text-zinc-400'
+                    }`}
+                  >
+                    Répétitions (PDC)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormMetric('duration')}
+                    className={`p-2 rounded border text-center transition-colors ${
+                      formMetric === 'duration'
+                        ? 'bg-zinc-800 border-zinc-700 text-zinc-100 font-semibold'
+                        : 'bg-zinc-950 border-zinc-800 text-zinc-400'
+                    }`}
+                  >
+                    Durée (sec)
                   </button>
                 </div>
               </div>
 
-              {/* Target Weight & Reps */}
+              {/* Target Weight / Reps / Duration */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="text-zinc-400 text-[11px] uppercase">
-                    Charge Cible ({unit.toUpperCase()})
+                    {formMetric === 'reps'
+                      ? 'Répétitions Cibles'
+                      : formMetric === 'duration'
+                      ? 'Durée Cible (sec)'
+                      : `Charge Cible (${unit.toUpperCase()})`}
                   </label>
                   <input
                     type="number"
-                    step="0.5"
+                    step={formMetric === 'reps' || formMetric === 'duration' ? '1' : '0.5'}
                     value={formWeight}
                     onChange={(e) => setFormWeight(e.target.value)}
                     className="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 p-2 rounded focus:outline-none focus:border-zinc-700"
@@ -430,10 +460,16 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
                   </div>
                 ) : (
                   <div className="space-y-1">
-                    <label className="text-zinc-400 text-[11px] uppercase">Charge de Départ ({unit.toUpperCase()})</label>
+                    <label className="text-zinc-400 text-[11px] uppercase">
+                      {formMetric === 'reps'
+                        ? 'Départ (réps)'
+                        : formMetric === 'duration'
+                        ? 'Départ (sec)'
+                        : `Charge de Départ (${unit.toUpperCase()})`}
+                    </label>
                     <input
                       type="number"
-                      step="0.5"
+                      step={formMetric === 'reps' || formMetric === 'duration' ? '1' : '0.5'}
                       value={formStartWeight}
                       onChange={(e) => setFormStartWeight(e.target.value)}
                       className="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 p-2 rounded focus:outline-none focus:border-zinc-700"

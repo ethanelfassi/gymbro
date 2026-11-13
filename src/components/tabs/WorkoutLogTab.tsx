@@ -156,16 +156,16 @@ export const WorkoutLogTab: React.FC<WorkoutLogTabProps> = ({
                     {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                   </button>
                   
-                  <div>
-                    <div className="flex items-center gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold text-zinc-100 text-sm">
                         {session.dateStr}
                       </span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] border ${splitBadgeColor}`}>
+                      <span className={`px-2 py-0.5 rounded text-[10px] border shrink-0 ${splitBadgeColor}`}>
                         {session.detectedType}
                       </span>
                       {session.sessionTitle && (
-                        <span className="text-[11px] text-zinc-400 italic">
+                        <span className="text-[11px] text-zinc-400 italic truncate max-w-full">
                           &ldquo;{session.sessionTitle}&rdquo;
                         </span>
                       )}
@@ -210,16 +210,32 @@ export const WorkoutLogTab: React.FC<WorkoutLogTabProps> = ({
                       key={exIdx}
                       className="p-3 rounded bg-zinc-900/60 border border-zinc-800/70 text-xs font-mono space-y-2"
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                         <button
                           onClick={() => onSelectExercise(ex.name)}
                           className="font-semibold text-zinc-200 hover:text-blue-400 transition-colors text-left"
                         >
                           {ex.name}
                         </button>
-                        <div className="text-[11px] text-zinc-500 flex items-center gap-3">
-                          <span>Top Set : <strong className="text-zinc-200">{unit === 'kg' ? `${lbsToKg(ex.topSetWeightLbs)} kg` : `${ex.topSetWeightLbs} lbs`}</strong> &times; {ex.topSetReps}</span>
-                          <span>1RM: <strong className="text-zinc-200">{formatWeight(ex.topSet1rmLbs, unit)}</strong></span>
+                        <div className="text-[11px] text-zinc-500 flex flex-wrap items-center gap-3">
+                          {ex.meta.mechanic === 'duration' ? (
+                            <span>Meilleure série : <strong className="text-zinc-200">{ex.topSetDurationSeconds}s</strong></span>
+                          ) : ex.meta.mechanic === 'bodyweight' && ex.topSetWeightLbs === 0 ? (
+                            <>
+                              <span>Top Set : <strong className="text-zinc-200">PDC</strong> &times; {ex.topSetReps} réps</span>
+                              <span>1RM: <strong className="text-zinc-200">{formatWeight(ex.topSet1rmLbs, unit)}</strong></span>
+                            </>
+                          ) : ex.meta.mechanic === 'assisted' ? (
+                            <>
+                              <span>Top Set : <strong className="text-zinc-200">-{formatWeight(ex.topSetWeightLbs, unit)} (assist.)</strong> &times; {ex.topSetReps}</span>
+                              <span>1RM net: <strong className="text-zinc-200">{formatWeight(ex.topSet1rmLbs, unit)}</strong></span>
+                            </>
+                          ) : (
+                            <>
+                              <span>Top Set : <strong className="text-zinc-200">{unit === 'kg' ? `${lbsToKg(ex.topSetWeightLbs)} kg` : `${ex.topSetWeightLbs} lbs`}</strong> &times; {ex.topSetReps}</span>
+                              <span>1RM: <strong className="text-zinc-200">{formatWeight(ex.topSet1rmLbs, unit)}</strong></span>
+                            </>
+                          )}
                         </div>
                       </div>
 
@@ -239,6 +255,12 @@ export const WorkoutLogTab: React.FC<WorkoutLogTabProps> = ({
                               <span>{st.distance} km</span>
                             ) : st.durationSeconds > 0 ? (
                               <span>{st.durationSeconds}s</span>
+                            ) : ex.meta.mechanic === 'bodyweight' && st.weightLbs === 0 ? (
+                              <span>PDC &times; {st.reps}</span>
+                            ) : ex.meta.mechanic === 'assisted' ? (
+                              <span>
+                                -{unit === 'kg' ? `${lbsToKg(st.weightLbs)} kg` : `${st.weightLbs} lbs`} &times; {st.reps}
+                              </span>
                             ) : (
                               <span>
                                 {unit === 'kg' ? `${lbsToKg(st.weightLbs)} kg` : `${st.weightLbs} lbs`} &times; {st.reps}

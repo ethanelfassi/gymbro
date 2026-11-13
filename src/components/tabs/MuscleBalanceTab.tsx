@@ -118,7 +118,7 @@ export const MuscleBalanceTab: React.FC<MuscleBalanceTabProps> = ({ sessions }) 
             </p>
           </div>
 
-          <div className="flex items-center gap-4 text-xs font-mono">
+          <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs font-mono">
             <span className="text-blue-400">Push: {splitBreakdown.push}% ({splitBreakdown.pushCount} s.)</span>
             <span className="text-emerald-400">Pull: {splitBreakdown.pull}% ({splitBreakdown.pullCount} s.)</span>
             <span className="text-amber-400">Legs: {splitBreakdown.legs}% ({splitBreakdown.legsCount} s.)</span>

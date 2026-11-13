@@ -8,12 +8,14 @@ import { Zap, TrendingUp, AlertCircle, ArrowRight, BatteryCharging, Filter } fro
 interface ProgressionTabProps {
   sessions: WorkoutSession[];
   unit: UnitSystem;
+  bodyweightLbs?: number;
   onSelectExercise: (name: string) => void;
 }
 
 export const ProgressionTab: React.FC<ProgressionTabProps> = ({
   sessions,
   unit,
+  bodyweightLbs = 170,
   onSelectExercise,
 }) => {
   const [statusFilter, setStatusFilter] = useState<'all' | 'progression' | 'plateau' | 'regression'>('all');
@@ -31,14 +33,14 @@ export const ProgressionTab: React.FC<ProgressionTabProps> = ({
     }
 
     const analyses = Array.from(names)
-      .map((name) => analyzeExerciseProgression(name, sessions))
+      .map((name) => analyzeExerciseProgression(name, sessions, bodyweightLbs))
       .filter((a): a is NonNullable<typeof a> => a !== null && a.totalSessionsCount >= 2);
 
     // Sort: plateau / progression first, then by sessions count
     analyses.sort((a, b) => b.totalSessionsCount - a.totalSessionsCount);
 
     return analyses;
-  }, [sessions]);
+  }, [sessions, bodyweightLbs]);
 
   // Intra-session fatigue data
   const fatigueData = useMemo(() => {
@@ -149,12 +151,43 @@ export const ProgressionTab: React.FC<ProgressionTabProps> = ({
                       </td>
 
                       <td className="py-2.5 px-3">
-                        <div className="font-semibold text-zinc-100">
-                          {unit === 'kg' ? `${lbsToKg(item.lastTopSetWeight)} kg` : `${item.lastTopSetWeight} lbs`} &times; {item.lastTopSetReps}
-                        </div>
-                        <div className="text-[10px] text-zinc-500">
-                          1RM: {formatWeight(item.lastEstimated1rm, unit)} ({item.lastSessionDate.slice(5)})
-                        </div>
+                        {item.mechanic === 'duration' ? (
+                          <>
+                            <div className="font-semibold text-zinc-100">
+                              {item.lastTopSetDurationSeconds} sec
+                            </div>
+                            <div className="text-[10px] text-zinc-500">
+                              Record : {item.historicalMaxDurationSeconds} sec ({item.lastSessionDate.slice(5)})
+                            </div>
+                          </>
+                        ) : item.mechanic === 'bodyweight' ? (
+                          <>
+                            <div className="font-semibold text-zinc-100">
+                              {item.lastTopSetWeight > 0 ? `+${formatWeight(item.lastTopSetWeight, unit)}` : 'PDC'} &times; {item.lastTopSetReps} réps
+                            </div>
+                            <div className="text-[10px] text-zinc-500">
+                              Charge eff. : {formatWeight(item.lastEffectiveLoadLbs, unit)} ({item.lastSessionDate.slice(5)})
+                            </div>
+                          </>
+                        ) : item.mechanic === 'assisted' ? (
+                          <>
+                            <div className="font-semibold text-zinc-100">
+                              -{formatWeight(item.lastTopSetWeight, unit)} (assist.) &times; {item.lastTopSetReps}
+                            </div>
+                            <div className="text-[10px] text-zinc-500">
+                              Charge nette : {formatWeight(item.lastEffectiveLoadLbs, unit)} ({item.lastSessionDate.slice(5)})
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="font-semibold text-zinc-100">
+                              {unit === 'kg' ? `${lbsToKg(item.lastTopSetWeight)} kg` : `${item.lastTopSetWeight} lbs`} &times; {item.lastTopSetReps}
+                            </div>
+                            <div className="text-[10px] text-zinc-500">
+                              1RM: {formatWeight(item.lastEstimated1rm, unit)} ({item.lastSessionDate.slice(5)})
+                            </div>
+                          </>
+                        )}
                       </td>
 
                       <td className="py-2.5 px-3">
@@ -166,7 +199,15 @@ export const ProgressionTab: React.FC<ProgressionTabProps> = ({
 
                       <td className="py-2.5 px-3">
                         <div className="text-zinc-100 font-medium">
-                          {unit === 'kg' ? `${lbsToKg(item.nextSessionGoal.targetWeightLbs)} kg` : `${item.nextSessionGoal.targetWeightLbs} lbs`} &bull; {item.nextSessionGoal.targetReps}
+                          {item.mechanic === 'duration' ? (
+                            item.nextSessionGoal.targetReps
+                          ) : item.mechanic === 'bodyweight' && item.nextSessionGoal.targetWeightLbs === 0 ? (
+                            <>PDC &bull; {item.nextSessionGoal.targetReps}</>
+                          ) : item.mechanic === 'assisted' ? (
+                            <>-{formatWeight(item.nextSessionGoal.targetWeightLbs, unit)} (assist.) &bull; {item.nextSessionGoal.targetReps}</>
+                          ) : (
+                            <>{unit === 'kg' ? `${lbsToKg(item.nextSessionGoal.targetWeightLbs)} kg` : `${item.nextSessionGoal.targetWeightLbs} lbs`} &bull; {item.nextSessionGoal.targetReps}</>
+                          )}
                         </div>
                         <div className="text-[10px] text-zinc-500 max-w-sm">
                           {item.nextSessionGoal.rationale}
@@ -233,7 +274,7 @@ export const ProgressionTab: React.FC<ProgressionTabProps> = ({
               </div>
 
               <div className="text-[10px] text-zinc-500 border-t border-zinc-800/60 pt-1">
-                S1: {f.firstWorkingSetReps} réps &rarr; S{f.workingSetsCount}: {f.lastWorkingSetReps} réps ({f.firstWorkingSetWeight} lbs)
+                S1: {f.firstWorkingSetReps} réps &rarr; S{f.workingSetsCount}: {f.lastWorkingSetReps} réps ({f.firstWorkingSetWeight > 0 ? formatWeight(f.firstWorkingSetWeight, unit) : 'PDC'})
               </div>
             </div>
           ))}

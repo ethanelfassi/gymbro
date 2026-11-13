@@ -1,40 +1,139 @@
-import { WorkoutGoal, GoalProgress, WorkoutSession } from './types';
+import { WorkoutGoal, GoalProgress, WorkoutSession, UnitSystem } from './types';
 import { getExerciseMeta } from './taxonomy';
+import { formatWeight } from './analytics';
 
 const STORAGE_KEY = 'gymbro_workout_goals_v1';
+
+export function formatGoalValue(
+  valLbs: number,
+  metric: WorkoutGoal['targetMetric'],
+  unit: UnitSystem
+): string {
+  if (metric === 'reps') {
+    return `${Math.round(valLbs)} réps`;
+  }
+  if (metric === 'duration') {
+    return `${Math.round(valLbs)} sec`;
+  }
+  return formatWeight(valLbs, unit);
+}
+
+export function formatGoalMetricLabel(goal: WorkoutGoal): string {
+  if (goal.targetMetric === '1rm') return '1RM Estimé';
+  if (goal.targetMetric === 'reps') return 'Série Max (PDC)';
+  if (goal.targetMetric === 'duration') return 'Temps de maintien';
+  return `Top Set (${goal.targetReps || 8} réps)`;
+}
 
 export function getDefaultGoals(): WorkoutGoal[] {
   return [
     {
-      id: 'goal-bench-2027',
+      id: 'goal-bench-dec2026',
       exerciseName: 'Développé couché',
-      targetMetric: '1rm',
-      targetWeightLbs: 175,
-      targetDate: '2026-12-31',
-      createdAt: '2026-08-01',
-      startWeightLbs: 135,
-      note: 'Objectif 175 lbs avant 2027',
-    },
-    {
-      id: 'goal-lat-pulldown',
-      exerciseName: 'Tirage vertical',
       targetMetric: 'top_weight',
-      targetWeightLbs: 150,
+      targetWeightLbs: 140,
       targetReps: 8,
       targetDate: '2026-12-31',
       createdAt: '2026-08-01',
-      startWeightLbs: 120,
-      note: '150 lbs × 8 réps avant 2027',
+      startWeightLbs: 105,
+      note: 'Passer 140 lbs × 8 réps (actuel : 125 lbs × 12)',
     },
     {
-      id: 'goal-squat-2027',
-      exerciseName: 'Squat',
-      targetMetric: '1rm',
-      targetWeightLbs: 185,
-      targetDate: '2027-03-31',
+      id: 'goal-chest-press-dec2026',
+      exerciseName: 'Presse pectorale',
+      targetMetric: 'top_weight',
+      targetWeightLbs: 150,
+      targetReps: 10,
+      targetDate: '2026-12-31',
       createdAt: '2026-08-01',
-      startWeightLbs: 145,
-      note: 'Viser 185 lbs au Squat',
+      startWeightLbs: 120,
+      note: 'Valider 150 lbs × 10 réps (actuel : 135×12 et 150×6)',
+    },
+    {
+      id: 'goal-incline-machine-dec2026',
+      exerciseName: 'Développé incliné à la machine',
+      targetMetric: 'top_weight',
+      targetWeightLbs: 145,
+      targetReps: 8,
+      targetDate: '2026-12-31',
+      createdAt: '2026-08-01',
+      startWeightLbs: 110,
+      note: 'Monter à 145 lbs × 8 réps (actuel : 130 lbs × 9)',
+    },
+    {
+      id: 'goal-lat-pulldown-dec2026',
+      exerciseName: 'Tirage vertical',
+      targetMetric: 'top_weight',
+      targetWeightLbs: 135,
+      targetReps: 10,
+      targetDate: '2026-12-31',
+      createdAt: '2026-08-01',
+      startWeightLbs: 105,
+      note: 'Maîtriser 135 lbs × 10 réps (actuel : 120×12 et 135×6)',
+    },
+    {
+      id: 'goal-tbar-dec2026',
+      exerciseName: 'Tirage T-bar avec support poitrine',
+      targetMetric: 'top_weight',
+      targetWeightLbs: 105,
+      targetReps: 10,
+      targetDate: '2026-12-31',
+      createdAt: '2026-08-01',
+      startWeightLbs: 80,
+      note: 'Franchir le cap des 105 lbs × 10 réps (actuel : 92.5 lbs × 10)',
+    },
+    {
+      id: 'goal-squat-dec2026',
+      exerciseName: 'Squat',
+      targetMetric: 'top_weight',
+      targetWeightLbs: 165,
+      targetReps: 8,
+      targetDate: '2026-12-31',
+      createdAt: '2026-08-01',
+      startWeightLbs: 125,
+      note: 'Atteindre 165 lbs × 8 réps au Squat (actuel : 145 lbs × 10)',
+    },
+    {
+      id: 'goal-shoulder-press-dec2026',
+      exerciseName: 'Développé épaules à la machine',
+      targetMetric: 'top_weight',
+      targetWeightLbs: 105,
+      targetReps: 10,
+      targetDate: '2026-12-31',
+      createdAt: '2026-08-01',
+      startWeightLbs: 75,
+      note: 'Passer sur le palier 105 lbs × 10 réps (actuel : 90 lbs × 12)',
+    },
+    {
+      id: 'goal-ez-curl-dec2026',
+      exerciseName: 'Curl à la barre EZ',
+      targetMetric: 'top_weight',
+      targetWeightLbs: 70,
+      targetReps: 8,
+      targetDate: '2026-12-31',
+      createdAt: '2026-08-01',
+      startWeightLbs: 50,
+      note: 'Valider 70 lbs × 8 réps propres (actuel : 60 lbs × 10)',
+    },
+    {
+      id: 'goal-dips-dec2026',
+      exerciseName: 'Dips',
+      targetMetric: 'reps',
+      targetWeightLbs: 15,
+      targetDate: '2026-12-31',
+      createdAt: '2026-08-01',
+      startWeightLbs: 6,
+      note: 'Enchaîner 15 Dips stricts au poids du corps (record récent : 10 réps)',
+    },
+    {
+      id: 'goal-deadhang-dec2026',
+      exerciseName: 'Dead Hang',
+      targetMetric: 'duration',
+      targetWeightLbs: 60,
+      targetDate: '2026-12-31',
+      createdAt: '2026-08-01',
+      startWeightLbs: 15,
+      note: 'Tenir 1 minute complète (60s) en Dead Hang (actuel : 40s)',
     },
   ];
 }
@@ -72,12 +171,18 @@ export function calculateGoalProgress(
 ): GoalProgress {
   const meta = getExerciseMeta(goal.exerciseName);
 
+  // Filter sessions starting from createdAt so current block goals track the active block
+  const relevant = goal.createdAt
+    ? sessions.filter((s) => s.dateStr >= goal.createdAt)
+    : sessions;
+  const sessionsToScan = relevant.length > 0 ? relevant : sessions;
+
   // Extract all sets of this exercise
   let bestValue = 0;
   let achievedDate: string | undefined = undefined;
 
   // We look chronologically to find best performance and when it was achieved
-  for (const s of sessions) {
+  for (const s of sessionsToScan) {
     const ex = s.exercises.find((e) => e.name === goal.exerciseName);
     if (!ex) continue;
 
@@ -85,21 +190,25 @@ export function calculateGoalProgress(
       if (st.isWarmup) continue;
 
       let val = 0;
-      if (goal.targetMetric === '1rm') {
+      if (goal.targetMetric === 'duration') {
+        val = st.durationSeconds;
+      } else if (goal.targetMetric === 'reps') {
+        val = st.reps;
+      } else if (goal.targetMetric === '1rm') {
         val = meta.mechanic === 'assisted'
-          ? Math.round(Math.max(0, bodyweightLbs - st.weightLbs) * (1 + st.reps / 30))
+          ? Math.round(Math.max(5, bodyweightLbs - st.weightLbs) * (1 + st.reps / 30))
           : st.estimated1rmLbs;
       } else {
         // 'top_weight'
         if (goal.targetReps && goal.targetReps > 1) {
           if (st.reps >= goal.targetReps) {
             val = meta.mechanic === 'assisted'
-              ? Math.max(0, bodyweightLbs - st.weightLbs)
+              ? Math.max(5, bodyweightLbs - st.weightLbs)
               : st.weightLbs;
           }
         } else {
           val = meta.mechanic === 'assisted'
-            ? Math.max(0, bodyweightLbs - st.weightLbs)
+            ? Math.max(5, bodyweightLbs - st.weightLbs)
             : st.weightLbs;
         }
       }

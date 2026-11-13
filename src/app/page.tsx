@@ -386,6 +386,7 @@ export default function Home() {
               <ProgressionTab
                 sessions={filteredSessions}
                 unit={unit}
+                bodyweightLbs={bodyweightLbs}
                 onSelectExercise={handleNavigateToExercise}
               />
             )}
