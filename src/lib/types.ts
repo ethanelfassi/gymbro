@@ -103,10 +103,16 @@ export interface GoalProgress {
   startValueLbs: number;
   targetValueLbs: number;
   progressPercent: number; // 0 to 100
+  timeElapsedPercent: number; // 0 to 100 (% du temps écoulé entre le début effectif et la deadline)
+  scheduleDelta: number; // progressPercent - timeElapsedPercent
+  effectiveStartDate: string; // Date de la 1re séance de l'exo sur le bloc (ou createdAt)
   remainingWeightLbs: number;
   daysRemaining: number;
+  requiredWeeklyPace: number; // Gain requis par semaine d'ici targetDate
+  currentWeeklyPace: number; // Gain moyen observé par semaine depuis effectiveStartDate
+  projectedDate?: string; // "YYYY-MM-DD" estimée au rythme actuel
   isAchieved: boolean;
   achievedDate?: string;
-  status: 'achieved' | 'on_track' | 'behind' | 'expired';
+  status: 'achieved' | 'ahead' | 'on_track' | 'behind' | 'expired';
   statusLabel: string;
 }

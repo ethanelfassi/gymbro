@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { WorkoutGoal, WorkoutSession, UnitSystem, GoalMetric } from '@/lib/types';
-import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel } from '@/lib/goals';
+import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel, formatGoalPace } from '@/lib/goals';
 import { lbsToKg, kgToLbs } from '@/lib/analytics';
 import {
   Target,
@@ -71,7 +71,7 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
   const stats = useMemo(() => {
     const total = progressList.length;
     const achieved = progressList.filter((p) => p.isAchieved).length;
-    const onTrack = progressList.filter((p) => !p.isAchieved && p.status === 'on_track').length;
+    const onTrack = progressList.filter((p) => !p.isAchieved && (p.status === 'on_track' || p.status === 'ahead')).length;
     const avgProgress = total > 0
       ? Math.round(progressList.reduce((acc, p) => acc + p.progressPercent, 0) / total)
       : 0;
@@ -172,7 +172,7 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
         </div>
 
         <div className="p-4 rounded-lg bg-zinc-900/40 border border-zinc-800">
-          <div className="text-xs font-mono text-zinc-500 uppercase">En bonne voie</div>
+          <div className="text-xs font-mono text-zinc-500 uppercase">En bonne voie / Avance</div>
           <div className="text-2xl font-mono font-semibold text-blue-400 mt-1">
             {stats.onTrack}
           </div>
@@ -217,6 +217,8 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
             let badgeStyle = 'bg-zinc-800 text-zinc-300 border-zinc-700';
             if (item.status === 'achieved') {
               badgeStyle = 'bg-emerald-950/80 text-emerald-300 border-emerald-800';
+            } else if (item.status === 'ahead') {
+              badgeStyle = 'bg-sky-950/80 text-sky-300 border-sky-800';
             } else if (item.status === 'on_track') {
               badgeStyle = 'bg-blue-950/80 text-blue-300 border-blue-800';
             } else if (item.status === 'behind') {
@@ -283,20 +285,27 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
                   </div>
 
                   <div className="p-2.5 rounded bg-zinc-950/70 border border-zinc-800/80">
-                    <span className="text-[10px] text-zinc-500 block uppercase">Reste</span>
+                    <span className="text-[10px] text-zinc-500 block uppercase">Reste &amp; Rythme</span>
                     <span className={`text-sm font-semibold ${item.isAchieved ? 'text-emerald-400' : 'text-zinc-200'}`}>
                       {item.isAchieved ? 'Atteint !' : `+${remainingDisplay}`}
                     </span>
+                    {!item.isAchieved && item.daysRemaining >= 0 && (
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">
+                        Requis : {formatGoalPace(item.requiredWeeklyPace, g.targetMetric, unit)}
+                      </span>
+                    )}
                   </div>
 
                   <div className="p-2.5 rounded bg-zinc-950/70 border border-zinc-800/80">
-                    <span className="text-[10px] text-zinc-500 block uppercase">Échéance</span>
+                    <span className="text-[10px] text-zinc-500 block uppercase">Échéance &amp; Proj.</span>
                     <span className="text-xs font-semibold text-zinc-200">
                       {g.targetDate}
                     </span>
                     <span className="text-[10px] text-zinc-500 block mt-0.5">
                       {item.isAchieved && item.achievedDate
                         ? `Validé le ${item.achievedDate}`
+                        : item.projectedDate && item.daysRemaining >= 0
+                        ? `Proj. : ${item.projectedDate} (${item.daysRemaining}j)`
                         : item.daysRemaining >= 0
                         ? `Dans ${item.daysRemaining} jour${item.daysRemaining > 1 ? 's' : ''}`
                         : 'Date dépassée'}
@@ -304,26 +313,52 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
                   </div>
                 </div>
 
-                {/* Visual Progress Bar */}
+                {/* Visual Progress Bar with Temporal Benchmark Marker */}
                 <div className="space-y-1.5 font-mono">
-                  <div className="flex items-center justify-between text-xs text-zinc-400">
-                    <span>Avancement : <strong className="text-zinc-200">{item.progressPercent}%</strong></span>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs text-zinc-400">
+                    <span>
+                      Avancement : <strong className="text-zinc-200">{item.progressPercent}%</strong>{' '}
+                      <span className="text-[11px] text-zinc-500">
+                        (Temps écoulé : {item.timeElapsedPercent}% &bull;{' '}
+                        <span
+                          className={
+                            item.scheduleDelta >= 10
+                              ? 'text-sky-400'
+                              : item.scheduleDelta >= -10
+                              ? 'text-zinc-400'
+                              : 'text-amber-400'
+                          }
+                        >
+                          {item.scheduleDelta >= 0 ? `+${item.scheduleDelta}% d'avance` : `${item.scheduleDelta}% vs calendrier`}
+                        </span>
+                        )
+                      </span>
+                    </span>
                     <span className="text-[11px] text-zinc-500">
                       Départ : {startDisplay} &rarr; Cible : {targetDisplay}
                     </span>
                   </div>
 
-                  <div className="w-full h-2.5 rounded-full bg-zinc-950 border border-zinc-800 overflow-hidden">
+                  <div className="relative w-full h-2.5 rounded-full bg-zinc-950 border border-zinc-800 overflow-hidden">
                     <div
                       style={{ width: `${item.progressPercent}%` }}
                       className={`h-full transition-all duration-500 ${
                         item.isAchieved
                           ? 'bg-emerald-500'
+                          : item.status === 'ahead'
+                          ? 'bg-sky-400'
                           : item.status === 'on_track'
                           ? 'bg-blue-500'
                           : 'bg-amber-500'
                       }`}
                     />
+                    {!item.isAchieved && item.daysRemaining >= 0 && (
+                      <div
+                        style={{ left: `${item.timeElapsedPercent}%` }}
+                        className="absolute top-0 bottom-0 w-0.5 bg-zinc-200/80"
+                        title={`Temps écoulé depuis le ${item.effectiveStartDate} : ${item.timeElapsedPercent}%`}
+                      />
+                    )}
                   </div>
                 </div>
 

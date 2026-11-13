@@ -644,8 +644,10 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                     className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${
                       gp.status === 'achieved'
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : gp.status === 'on_track'
+                        : gp.status === 'ahead'
                         ? 'bg-sky-500/10 border-sky-500/30 text-sky-400'
+                        : gp.status === 'on_track'
+                        ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
                         : gp.status === 'behind'
                         ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
                         : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
@@ -665,22 +667,34 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                     </span>
                     <span className="text-zinc-300 font-semibold">{gp.progressPercent}%</span>
                   </div>
-                  <div className="w-full bg-zinc-950 rounded-full h-1.5 overflow-hidden border border-zinc-800">
+                  <div className="relative w-full bg-zinc-950 rounded-full h-1.5 overflow-hidden border border-zinc-800">
                     <div
                       className={`h-full ${
                         gp.isAchieved
                           ? 'bg-emerald-400'
-                          : gp.status === 'on_track'
+                          : gp.status === 'ahead'
                           ? 'bg-sky-400'
+                          : gp.status === 'on_track'
+                          ? 'bg-blue-400'
                           : 'bg-amber-400'
                       }`}
                       style={{ width: `${gp.progressPercent}%` }}
                     />
+                    {!gp.isAchieved && gp.daysRemaining >= 0 && (
+                      <div
+                        style={{ left: `${gp.timeElapsedPercent}%` }}
+                        className="absolute top-0 bottom-0 w-0.5 bg-zinc-200/75"
+                        title={`Temps écoulé : ${gp.timeElapsedPercent}%`}
+                      />
+                    )}
                   </div>
                 </div>
 
                 <div className="flex justify-between text-[10px] font-mono text-zinc-500">
-                  <span>{formatGoalMetricLabel(gp.goal)}</span>
+                  <span>
+                    {formatGoalMetricLabel(gp.goal)} &bull;{' '}
+                    {gp.scheduleDelta >= 0 ? `+${gp.scheduleDelta}%` : `${gp.scheduleDelta}%`} vs temps
+                  </span>
                   <span>{gp.daysRemaining >= 0 ? `${gp.daysRemaining} j restants` : 'Dépassé'}</span>
                 </div>
               </div>

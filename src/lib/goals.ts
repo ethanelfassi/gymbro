@@ -1,6 +1,6 @@
 import { WorkoutGoal, GoalProgress, WorkoutSession, UnitSystem } from './types';
 import { getExerciseMeta } from './taxonomy';
-import { formatWeight } from './analytics';
+import { formatWeight, lbsToKg } from './analytics';
 
 const STORAGE_KEY = 'gymbro_workout_goals_v1';
 
@@ -23,6 +23,21 @@ export function formatGoalMetricLabel(goal: WorkoutGoal): string {
   if (goal.targetMetric === 'reps') return 'Série Max (PDC)';
   if (goal.targetMetric === 'duration') return 'Temps de maintien';
   return `Top Set (${goal.targetReps || 8} réps)`;
+}
+
+export function formatGoalPace(
+  pacePerWeek: number,
+  metric: WorkoutGoal['targetMetric'],
+  unit: UnitSystem
+): string {
+  if (metric === 'reps') {
+    return `+${Math.round(pacePerWeek * 10) / 10} rép/sem`;
+  }
+  if (metric === 'duration') {
+    return `+${Math.round(pacePerWeek * 10) / 10} sec/sem`;
+  }
+  const val = unit === 'kg' ? lbsToKg(pacePerWeek) : Math.round(pacePerWeek * 10) / 10;
+  return `+${val} ${unit}/sem`;
 }
 
 export function getDefaultGoals(): WorkoutGoal[] {
@@ -180,11 +195,16 @@ export function calculateGoalProgress(
   // Extract all sets of this exercise
   let bestValue = 0;
   let achievedDate: string | undefined = undefined;
+  let firstExerciseDate: string | undefined = undefined;
 
-  // We look chronologically to find best performance and when it was achieved
+  // We look chronologically to find best performance, first session date, and achievement date
   for (const s of sessionsToScan) {
     const ex = s.exercises.find((e) => e.name === goal.exerciseName);
     if (!ex) continue;
+
+    if (!firstExerciseDate) {
+      firstExerciseDate = s.dateStr;
+    }
 
     for (const st of ex.sets) {
       if (st.isWarmup) continue;
@@ -236,14 +256,41 @@ export function calculateGoalProgress(
 
   const remainingWeightLbs = Math.max(0, Math.round((targetVal - bestValue) * 10) / 10);
 
-  // Calculate days remaining
-  // Use today or latest session date
+  // Temporal pace & projection relative to effectiveStartDate -> targetDate
+  const effectiveStartDate = firstExerciseDate || goal.createdAt || '2026-08-01';
   const now = new Date();
-  const target = new Date(goal.targetDate + 'T23:59:59');
-  const diffTime = target.getTime() - now.getTime();
+  const startTs = new Date(effectiveStartDate + 'T00:00:00').getTime();
+  const targetTs = new Date(goal.targetDate + 'T23:59:59').getTime();
+  const nowTs = now.getTime();
+  const diffTime = targetTs - nowTs;
   const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-  // Determine status
+  const totalDurationMs = Math.max(24 * 3600 * 1000, targetTs - startTs);
+  const elapsedMs = Math.max(24 * 3600 * 1000, nowTs - startTs);
+  const timeElapsedPercent = Math.min(100, Math.max(1, Math.round((elapsedMs / totalDurationMs) * 100)));
+  const scheduleDelta = progressPercent - timeElapsedPercent;
+
+  const weeksElapsed = Math.max(1, elapsedMs / (7 * 24 * 3600 * 1000));
+  const weeksRemaining = Math.max(0.5, Math.max(1, daysRemaining) / 7);
+  const gainedSoFar = Math.max(0, bestValue - startVal);
+  const currentWeeklyPace = Math.round((gainedSoFar / weeksElapsed) * 10) / 10;
+  const requiredWeeklyPace = isAchieved
+    ? 0
+    : Math.round((remainingWeightLbs / weeksRemaining) * 10) / 10;
+
+  let projectedDate: string | undefined = undefined;
+  if (isAchieved && achievedDate) {
+    projectedDate = achievedDate;
+  } else if (gainedSoFar > 0 && remainingWeightLbs > 0) {
+    const msPerUnit = elapsedMs / gainedSoFar;
+    const remainingMs = remainingWeightLbs * msPerUnit;
+    const projTs = nowTs + remainingMs;
+    if (remainingMs <= 365 * 24 * 3600 * 1000) {
+      projectedDate = new Date(projTs).toISOString().split('T')[0];
+    }
+  }
+
+  // Determine status comparing progressPercent vs timeElapsedPercent
   let status: GoalProgress['status'] = 'on_track';
   let statusLabel = 'En bonne voie';
 
@@ -253,7 +300,10 @@ export function calculateGoalProgress(
   } else if (daysRemaining < 0) {
     status = 'expired';
     statusLabel = 'Échéance dépassée';
-  } else if (progressPercent >= 50 || daysRemaining > 60) {
+  } else if (scheduleDelta >= 10) {
+    status = 'ahead';
+    statusLabel = 'En avance';
+  } else if (scheduleDelta >= -10) {
     status = 'on_track';
     statusLabel = 'En bonne voie';
   } else {
@@ -267,8 +317,14 @@ export function calculateGoalProgress(
     startValueLbs: startVal,
     targetValueLbs: targetVal,
     progressPercent,
+    timeElapsedPercent,
+    scheduleDelta,
+    effectiveStartDate,
     remainingWeightLbs,
     daysRemaining,
+    requiredWeeklyPace,
+    currentWeeklyPace,
+    projectedDate,
     isAchieved,
     achievedDate,
     status,

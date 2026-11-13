@@ -3,7 +3,7 @@
 import React, { useState, useMemo } from 'react';
 import { WorkoutSession, UnitSystem, WorkoutGoal } from '@/lib/types';
 import { formatWeight, lbsToKg, estimate1rm } from '@/lib/analytics';
-import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel } from '@/lib/goals';
+import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel, formatGoalPace } from '@/lib/goals';
 import { getExerciseMeta } from '@/lib/taxonomy';
 import { Search, Trophy, History, FileText, Target } from 'lucide-react';
 import {
@@ -526,8 +526,10 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                   className={`text-[11px] font-mono px-2 py-0.5 rounded border ${
                     goalProgress.status === 'achieved'
                       ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-medium'
-                      : goalProgress.status === 'on_track'
+                      : goalProgress.status === 'ahead'
                       ? 'bg-sky-500/10 border-sky-500/30 text-sky-400'
+                      : goalProgress.status === 'on_track'
+                      ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
                       : goalProgress.status === 'behind'
                       ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
                       : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
@@ -545,7 +547,7 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
 
             {/* Progress Bar & Numeric readout */}
             <div className="space-y-1.5">
-              <div className="flex justify-between items-center text-xs font-mono">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs font-mono">
                 <span className="text-zinc-400">
                   Actuel : <span className="text-zinc-100 font-semibold">{formatGoalValue(goalProgress.currentValueLbs, activeGoal.targetMetric, unit)}</span>
                   {' '}/ Cible : <span className="text-zinc-100 font-semibold">{formatGoalValue(goalProgress.targetValueLbs, activeGoal.targetMetric, unit)}</span>
@@ -554,22 +556,37 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                   {goalProgress.progressPercent}%
                   {goalProgress.remainingWeightLbs > 0 && (
                     <span className="text-zinc-500 font-normal ml-1">
-                      (reste {formatGoalValue(goalProgress.remainingWeightLbs, activeGoal.targetMetric, unit)})
+                      (reste {formatGoalValue(goalProgress.remainingWeightLbs, activeGoal.targetMetric, unit)} &bull; requis : {formatGoalPace(goalProgress.requiredWeeklyPace, activeGoal.targetMetric, unit)})
                     </span>
                   )}
                 </span>
               </div>
-              <div className="w-full bg-zinc-950 rounded-full h-2 overflow-hidden border border-zinc-800">
+              <div className="relative w-full bg-zinc-950 rounded-full h-2 overflow-hidden border border-zinc-800">
                 <div
                   className={`h-full transition-all duration-300 ${
                     goalProgress.isAchieved
                       ? 'bg-emerald-400'
-                      : goalProgress.status === 'on_track'
+                      : goalProgress.status === 'ahead'
                       ? 'bg-sky-400'
+                      : goalProgress.status === 'on_track'
+                      ? 'bg-blue-400'
                       : 'bg-amber-400'
                   }`}
                   style={{ width: `${goalProgress.progressPercent}%` }}
                 />
+                {!goalProgress.isAchieved && goalProgress.daysRemaining >= 0 && (
+                  <div
+                    style={{ left: `${goalProgress.timeElapsedPercent}%` }}
+                    className="absolute top-0 bottom-0 w-0.5 bg-zinc-200/80"
+                    title={`Temps écoulé : ${goalProgress.timeElapsedPercent}%`}
+                  />
+                )}
+              </div>
+              <div className="flex justify-between text-[10px] font-mono text-zinc-500">
+                <span>Temps écoulé : {goalProgress.timeElapsedPercent}% ({goalProgress.scheduleDelta >= 0 ? `+${goalProgress.scheduleDelta}% d'avance` : `${goalProgress.scheduleDelta}% vs calendrier`})</span>
+                {goalProgress.projectedDate && !goalProgress.isAchieved && (
+                  <span>Projection : {goalProgress.projectedDate}</span>
+                )}
               </div>
             </div>
           </div>
