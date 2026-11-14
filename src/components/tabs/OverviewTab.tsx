@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import { WorkoutSession, UnitSystem, WorkoutGoal } from '@/lib/types';
+import { WorkoutSession, UnitSystem, WorkoutGoal, ExerciseMechanic } from '@/lib/types';
 import { formatWeight, lbsToKg } from '@/lib/analytics';
 import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel } from '@/lib/goals';
 import {
@@ -133,26 +133,51 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     const records: {
       date: string;
       exercise: string;
+      mechanic: ExerciseMechanic;
       weightLbs: number;
       reps: number;
+      durationSeconds: number;
       est1rmLbs: number;
     }[] = [];
 
-    const exerciseBest1rm = new Map<string, number>();
+    const exerciseBest = new Map<string, number>();
 
     for (const s of allSessions) {
       for (const ex of s.exercises) {
-        if (ex.meta.mechanic === 'duration') continue;
+        if (ex.meta.category === 'Cardio') continue;
+
+        if (ex.meta.mechanic === 'duration') {
+          for (const st of ex.sets) {
+            if (st.isWarmup || st.durationSeconds <= 0) continue;
+            const currentBest = exerciseBest.get(ex.name) || 0;
+            if (st.durationSeconds > currentBest) {
+              exerciseBest.set(ex.name, st.durationSeconds);
+              records.push({
+                date: s.dateStr,
+                exercise: ex.name,
+                mechanic: ex.meta.mechanic,
+                weightLbs: 0,
+                reps: 0,
+                durationSeconds: st.durationSeconds,
+                est1rmLbs: 0,
+              });
+            }
+          }
+          continue;
+        }
+
         for (const st of ex.sets) {
           if (st.isWarmup || st.estimated1rmLbs <= 0) continue;
-          const currentBest = exerciseBest1rm.get(ex.name) || 0;
+          const currentBest = exerciseBest.get(ex.name) || 0;
           if (st.estimated1rmLbs > currentBest) {
-            exerciseBest1rm.set(ex.name, st.estimated1rmLbs);
+            exerciseBest.set(ex.name, st.estimated1rmLbs);
             records.push({
               date: s.dateStr,
               exercise: ex.name,
+              mechanic: ex.meta.mechanic,
               weightLbs: st.weightLbs,
               reps: st.reps,
+              durationSeconds: 0,
               est1rmLbs: st.estimated1rmLbs,
             });
           }
@@ -660,9 +685,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 <div className="space-y-1">
                   <div className="flex justify-between text-[11px] font-mono text-zinc-400">
                     <span>
-                      {formatGoalValue(gp.currentValueLbs, gp.goal.targetMetric, unit)} &rarr;{' '}
+                      {formatGoalValue(gp.currentValueLbs, gp.goal.targetMetric, unit, gp.mechanic)} &rarr;{' '}
                       <span className="text-zinc-200 font-semibold">
-                        {formatGoalValue(gp.targetValueLbs, gp.goal.targetMetric, unit)}
+                        {formatGoalValue(gp.targetValueLbs, gp.goal.targetMetric, unit, gp.mechanic)}
                       </span>
                     </span>
                     <span className="text-zinc-300 font-semibold">{gp.progressPercent}%</span>
@@ -784,15 +809,43 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                     <ArrowUpRight className="w-3.5 h-3.5 text-zinc-500" />
                   </div>
                   <div className="text-[11px] text-zinc-500 font-mono mt-0.5">
-                    {pr.date} &bull; Série : {pr.weightLbs > 0 ? formatWeight(pr.weightLbs, unit) : 'PDC'} &times; {pr.reps} réps
+                    {pr.mechanic === 'duration' ? (
+                      `${pr.date} • Maintien`
+                    ) : pr.mechanic === 'assisted' ? (
+                      `${pr.date} • Série : -${formatWeight(pr.weightLbs, unit)} (assist.) × ${pr.reps} réps`
+                    ) : pr.mechanic === 'bodyweight' ? (
+                      `${pr.date} • Série : ${pr.weightLbs > 0 ? `+${formatWeight(pr.weightLbs, unit)}` : 'PDC'} × ${pr.reps} réps`
+                    ) : (
+                      `${pr.date} • Série : ${pr.weightLbs > 0 ? formatWeight(pr.weightLbs, unit) : 'PDC'} × ${pr.reps} réps`
+                    )}
                   </div>
                 </div>
 
                 <div className="text-right">
-                  <span className="text-[10px] text-zinc-500 font-mono block">1RM estimé</span>
-                  <span className="font-mono font-semibold text-zinc-100">
-                    {formatWeight(pr.est1rmLbs, unit)}
-                  </span>
+                  {pr.mechanic === 'duration' ? (
+                    <>
+                      <span className="text-[10px] text-zinc-500 font-mono block">Record durée</span>
+                      <span className="font-mono font-semibold text-zinc-100">
+                        {pr.durationSeconds} sec
+                      </span>
+                    </>
+                  ) : pr.mechanic === 'bodyweight' && pr.weightLbs === 0 ? (
+                    <>
+                      <span className="text-[10px] text-zinc-500 font-mono block">Record PDC</span>
+                      <span className="font-mono font-semibold text-zinc-100">
+                        {pr.reps} réps
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-[10px] text-zinc-500 font-mono block">
+                        {pr.mechanic === 'assisted' ? '1RM net' : '1RM estimé'}
+                      </span>
+                      <span className="font-mono font-semibold text-zinc-100">
+                        {formatWeight(pr.est1rmLbs, unit)}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             ))}

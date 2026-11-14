@@ -1,4 +1,4 @@
-import { ExerciseMeta, MovementType, MuscleGroup } from './types';
+import { ExerciseMechanic, ExerciseMeta, MovementType, MuscleGroup } from './types';
 
 export const EXERCISE_TAXONOMY: Record<string, ExerciseMeta> = {
   // PUSH
@@ -160,6 +160,12 @@ export const EXERCISE_TAXONOMY: Record<string, ExerciseMeta> = {
     secondaryMuscles: ["Biceps"],
   },
   "Tirage iso-latéral": {
+    category: "Pull",
+    mechanic: "standard",
+    primaryMuscle: "Dos",
+    secondaryMuscles: ["Biceps"],
+  },
+  "Single arm cable row": {
     category: "Pull",
     mechanic: "standard",
     primaryMuscle: "Dos",
@@ -349,23 +355,59 @@ export function getExerciseMeta(name: string): ExerciseMeta {
 
   // Fallback heuristic if unknown exercise is added later
   const lower = name.toLowerCase();
-  if (lower.includes('curl') || lower.includes('tirage') || lower.includes('traction') || lower.includes('row')) {
+  const detectedMechanic: ExerciseMechanic = lower.includes('assist')
+    ? 'assisted'
+    : lower.includes('dead hang') ||
+      lower.includes('gainage') ||
+      lower.includes('plank') ||
+      lower.includes('planche') ||
+      lower.includes('chaise')
+    ? 'duration'
+    : lower.includes('pompe') ||
+      lower.includes('traction') ||
+      lower.includes('dips') ||
+      lower.includes('muscle up') ||
+      lower.includes('crunch décliné')
+    ? 'bodyweight'
+    : 'standard';
+
+  if (lower.includes('curl') || lower.includes('tirage') || lower.includes('traction') || lower.includes('row') || lower.includes('dead hang')) {
     return {
       category: "Pull",
-      mechanic: "standard",
-      primaryMuscle: lower.includes('curl') ? "Biceps" : "Dos",
+      mechanic: detectedMechanic,
+      primaryMuscle: lower.includes('curl') ? "Biceps" : lower.includes('dead hang') ? "Avant-bras" : "Dos",
     };
   }
-  if (lower.includes('squat') || lower.includes('leg') || lower.includes('mollet') || lower.includes('presse à cuisse')) {
+  if (lower.includes('squat') || lower.includes('leg') || lower.includes('mollet') || lower.includes('presse à cuisse') || lower.includes('chaise')) {
     return {
       category: "Legs",
-      mechanic: "standard",
+      mechanic: detectedMechanic,
       primaryMuscle: lower.includes('mollet') ? "Mollets" : (lower.includes('curl') ? "Ischios & Fessiers" : "Quadriceps"),
+    };
+  }
+  if (lower.includes('gainage') || lower.includes('plank') || lower.includes('planche') || lower.includes('crunch')) {
+    return {
+      category: "Core",
+      mechanic: detectedMechanic,
+      primaryMuscle: "Abdominaux",
     };
   }
   return {
     category: "Push",
-    mechanic: "standard",
+    mechanic: detectedMechanic,
     primaryMuscle: "Pectoraux",
   };
+}
+
+export function getMechanicLabel(mechanic: ExerciseMechanic): string {
+  switch (mechanic) {
+    case 'assisted':
+      return 'Poids Assisté (-lbs)';
+    case 'bodyweight':
+      return 'Poids du Corps (PDC)';
+    case 'duration':
+      return 'Durée / Maintien (sec)';
+    default:
+      return 'Charge × Réps';
+  }
 }

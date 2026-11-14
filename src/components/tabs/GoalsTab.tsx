@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { WorkoutGoal, WorkoutSession, UnitSystem, GoalMetric } from '@/lib/types';
 import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel, formatGoalPace } from '@/lib/goals';
+import { getExerciseMeta, getMechanicLabel } from '@/lib/taxonomy';
 import { lbsToKg, kgToLbs } from '@/lib/analytics';
 import {
   Target,
@@ -79,15 +80,199 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
     return { total, achieved, onTrack, avgProgress };
   }, [progressList]);
 
+  const selectedMeta = useMemo(
+    () => getExerciseMeta(formExName || 'Développé couché'),
+    [formExName]
+  );
+
+  const allowedMetrics = useMemo<GoalMetric[]>(() => {
+    if (selectedMeta.mechanic === 'duration') return ['duration'];
+    if (selectedMeta.mechanic === 'bodyweight') return ['reps', 'top_weight'];
+    return ['top_weight', '1rm'];
+  }, [selectedMeta.mechanic]);
+
+  const computeExerciseDefaults = useCallback(
+    (exName: string, overrideMetric?: GoalMetric) => {
+      const meta = getExerciseMeta(exName);
+      const blockSessions = sessions.filter((s) => s.dateStr >= '2026-08-01');
+      const pool = blockSessions.length > 0 ? blockSessions : sessions;
+
+      const defaultMetric: GoalMetric =
+        overrideMetric ||
+        (meta.mechanic === 'duration'
+          ? 'duration'
+          : meta.mechanic === 'bodyweight'
+          ? 'reps'
+          : 'top_weight');
+
+      const exEntries: {
+        topWeight: number;
+        sets: WorkoutSession['exercises'][0]['sets'];
+      }[] = [];
+
+      for (const s of pool) {
+        const found = s.exercises.find((e) => e.name === exName);
+        if (found && found.sets.length > 0) {
+          exEntries.push({ topWeight: found.topSetWeightLbs, sets: found.sets });
+        }
+      }
+
+      const toDisplayWeight = (lbs: number) =>
+        unit === 'kg' ? lbsToKg(lbs) : Math.round(lbs * 10) / 10;
+
+      if (defaultMetric === 'duration') {
+        const firstEntry = exEntries[0];
+        const firstSec = firstEntry
+          ? Math.max(0, ...firstEntry.sets.map((st) => st.durationSeconds))
+          : 15;
+        const maxSec = exEntries.reduce(
+          (acc, e) => Math.max(acc, ...e.sets.map((st) => st.durationSeconds)),
+          0
+        );
+        const startVal = firstSec > 0 ? firstSec : 15;
+        const targetVal = Math.max(startVal + 15, (maxSec > 0 ? maxSec : 30) + 15);
+        return {
+          metric: defaultMetric,
+          start: String(startVal),
+          target: String(targetVal),
+          reps: '8',
+        };
+      }
+
+      if (defaultMetric === 'reps') {
+        const firstEntry = exEntries[0];
+        const firstReps = firstEntry
+          ? Math.max(0, ...firstEntry.sets.filter((st) => !st.isWarmup).map((st) => st.reps))
+          : 6;
+        const maxReps = exEntries.reduce(
+          (acc, e) =>
+            Math.max(acc, ...e.sets.filter((st) => !st.isWarmup).map((st) => st.reps)),
+          0
+        );
+        const startVal = firstReps > 0 ? firstReps : 6;
+        const targetVal = Math.max(startVal + 3, (maxReps > 0 ? maxReps : 8) + 4);
+        return {
+          metric: defaultMetric,
+          start: String(startVal),
+          target: String(targetVal),
+          reps: String(targetVal),
+        };
+      }
+
+      if (meta.mechanic === 'assisted') {
+        if (defaultMetric === '1rm') {
+          const calcNet1rm = (w: number, r: number) =>
+            Math.round(Math.max(5, bodyweightLbs - w) * (1 + r / 30));
+          const firstEntry = exEntries[0];
+          const first1rm = firstEntry
+            ? Math.max(
+                0,
+                ...firstEntry.sets
+                  .filter((st) => !st.isWarmup)
+                  .map((st) => calcNet1rm(st.weightLbs, st.reps))
+              )
+            : 95;
+          const max1rm = exEntries.reduce(
+            (acc, e) =>
+              Math.max(
+                acc,
+                ...e.sets
+                  .filter((st) => !st.isWarmup)
+                  .map((st) => calcNet1rm(st.weightLbs, st.reps))
+              ),
+            0
+          );
+          const startLbs = first1rm > 0 ? first1rm : 95;
+          const targetLbs = Math.max(startLbs + 15, (max1rm > 0 ? max1rm : 110) + 15);
+          return {
+            metric: defaultMetric,
+            start: String(toDisplayWeight(startLbs)),
+            target: String(toDisplayWeight(targetLbs)),
+            reps: '8',
+          };
+        }
+
+        // Assistance machine weight (lower = harder)
+        const firstEntry = exEntries[0];
+        const firstAssist = firstEntry
+          ? Math.max(
+              ...firstEntry.sets
+                .filter((st) => !st.isWarmup)
+                .map((st) => st.weightLbs)
+            )
+          : 90;
+        const workingAssists = exEntries.flatMap((e) =>
+          e.sets.filter((st) => !st.isWarmup).map((st) => st.weightLbs)
+        );
+        const minAssist = workingAssists.length > 0 ? Math.min(...workingAssists) : 75;
+        const startLbs = Number.isFinite(firstAssist) && firstAssist > 0 ? firstAssist : 90;
+        const targetLbs = Math.max(0, Math.round((minAssist - 20) * 10) / 10);
+        return {
+          metric: defaultMetric,
+          start: String(toDisplayWeight(startLbs)),
+          target: String(toDisplayWeight(targetLbs)),
+          reps: '8',
+        };
+      }
+
+      // Standard or weighted bodyweight
+      if (defaultMetric === '1rm') {
+        const firstEntry = exEntries[0];
+        const first1rm = firstEntry
+          ? Math.max(
+              0,
+              ...firstEntry.sets
+                .filter((st) => !st.isWarmup)
+                .map((st) => st.estimated1rmLbs)
+            )
+          : 120;
+        const max1rm = exEntries.reduce(
+          (acc, e) =>
+            Math.max(
+              acc,
+              ...e.sets
+                .filter((st) => !st.isWarmup)
+                .map((st) => st.estimated1rmLbs)
+            ),
+          0
+        );
+        const startLbs = first1rm > 0 ? first1rm : 120;
+        const targetLbs = Math.max(startLbs + 15, (max1rm > 0 ? max1rm : 140) + 20);
+        return {
+          metric: defaultMetric,
+          start: String(toDisplayWeight(startLbs)),
+          target: String(toDisplayWeight(targetLbs)),
+          reps: '8',
+        };
+      }
+
+      const firstTop = exEntries[0]?.topWeight ?? (meta.mechanic === 'bodyweight' ? 0 : 100);
+      const maxTop = exEntries.reduce((acc, e) => Math.max(acc, e.topWeight), 0);
+      const startLbs = meta.mechanic === 'bodyweight' ? firstTop : firstTop > 0 ? firstTop : 100;
+      const targetLbs =
+        meta.mechanic === 'bodyweight'
+          ? (maxTop > 0 ? maxTop + 10 : 15)
+          : Math.max(startLbs + 15, (maxTop > 0 ? maxTop : 115) + 15);
+      return {
+        metric: defaultMetric,
+        start: String(toDisplayWeight(startLbs)),
+        target: String(toDisplayWeight(targetLbs)),
+        reps: '8',
+      };
+    },
+    [sessions, unit, bodyweightLbs]
+  );
+
   const openNewGoalModal = () => {
     setEditingGoal(null);
     const defaultEx = availableExercises.length > 0 ? availableExercises[0] : 'Développé couché';
+    const defaults = computeExerciseDefaults(defaultEx);
     setFormExName(defaultEx);
-    setFormMetric('1rm');
-    setFormWeight(unit === 'kg' ? '80' : '175');
-    setFormReps('8');
+    setFormMetric(defaults.metric);
+    setFormWeight(defaults.target);
+    setFormReps(defaults.reps);
     setFormDate('2026-12-31');
-    setFormStartWeight(unit === 'kg' ? '60' : '135');
+    setFormStartWeight(defaults.start);
     setFormNote('Avant 2027');
     setIsModalOpen(true);
   };
@@ -105,20 +290,73 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
     setIsModalOpen(true);
   };
 
+  const handleExerciseChange = (nextEx: string) => {
+    setFormExName(nextEx);
+    if (!editingGoal) {
+      const defaults = computeExerciseDefaults(nextEx);
+      setFormMetric(defaults.metric);
+      setFormWeight(defaults.target);
+      setFormReps(defaults.reps);
+      setFormStartWeight(defaults.start);
+    } else {
+      const nextMeta = getExerciseMeta(nextEx);
+      const nextAllowed: GoalMetric[] =
+        nextMeta.mechanic === 'duration'
+          ? ['duration']
+          : nextMeta.mechanic === 'bodyweight'
+          ? ['reps', 'top_weight']
+          : ['top_weight', '1rm'];
+      if (!nextAllowed.includes(formMetric)) {
+        const defaults = computeExerciseDefaults(nextEx);
+        setFormMetric(defaults.metric);
+        setFormWeight(defaults.target);
+        setFormReps(defaults.reps);
+        setFormStartWeight(defaults.start);
+      }
+    }
+  };
+
+  const handleMetricChange = (nextMetric: GoalMetric) => {
+    if (nextMetric === formMetric) return;
+    if (!editingGoal) {
+      const defaults = computeExerciseDefaults(formExName, nextMetric);
+      setFormMetric(defaults.metric);
+      setFormWeight(defaults.target);
+      setFormReps(defaults.reps);
+      setFormStartWeight(defaults.start);
+    } else {
+      setFormMetric(nextMetric);
+    }
+  };
+
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const rawTargetWeight = parseFloat(formWeight);
     const rawStartWeight = parseFloat(formStartWeight);
 
-    if (isNaN(rawTargetWeight) || rawTargetWeight <= 0) return;
+    const allowZeroTarget =
+      formMetric === 'top_weight' &&
+      (selectedMeta.mechanic === 'assisted' || selectedMeta.mechanic === 'bodyweight');
+
+    if (
+      isNaN(rawTargetWeight) ||
+      rawTargetWeight < 0 ||
+      (!allowZeroTarget && rawTargetWeight === 0)
+    ) {
+      return;
+    }
 
     const isWeightMetric = formMetric === '1rm' || formMetric === 'top_weight';
 
     // Convert to lbs only for weight-based metrics if entered in kg
     const targetWeightLbs = isWeightMetric && unit === 'kg' ? kgToLbs(rawTargetWeight) : rawTargetWeight;
+    const fallbackStartLbs =
+      selectedMeta.mechanic === 'assisted' && formMetric === 'top_weight'
+        ? targetWeightLbs + 20
+        : targetWeightLbs * 0.8;
     const startWeightLbs = !isNaN(rawStartWeight)
       ? (isWeightMetric && unit === 'kg' ? kgToLbs(rawStartWeight) : rawStartWeight)
-      : targetWeightLbs * 0.8;
+      : fallbackStartLbs;
 
     const goalToSave: WorkoutGoal = {
       id: editingGoal ? editingGoal.id : `goal-${Date.now()}`,
@@ -208,10 +446,10 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
         ) : (
           progressList.map((item) => {
             const g = item.goal;
-            const targetDisplay = formatGoalValue(g.targetWeightLbs, g.targetMetric, unit);
-            const currentDisplay = formatGoalValue(item.currentValueLbs, g.targetMetric, unit);
-            const startDisplay = formatGoalValue(item.startValueLbs, g.targetMetric, unit);
-            const remainingDisplay = formatGoalValue(item.remainingWeightLbs, g.targetMetric, unit);
+            const targetDisplay = formatGoalValue(g.targetWeightLbs, g.targetMetric, unit, item.mechanic);
+            const currentDisplay = formatGoalValue(item.currentValueLbs, g.targetMetric, unit, item.mechanic);
+            const startDisplay = formatGoalValue(item.startValueLbs, g.targetMetric, unit, item.mechanic);
+            const remainingDisplay = formatGoalValue(item.remainingWeightLbs, g.targetMetric, unit, item.mechanic);
             const metricLabel = formatGoalMetricLabel(g);
 
             let badgeStyle = 'bg-zinc-800 text-zinc-300 border-zinc-700';
@@ -234,7 +472,7 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
               >
                 {/* Header: Exercise title, status badge & action buttons */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => onSelectExercise(g.exerciseName)}
                       className="font-semibold text-zinc-100 text-base hover:text-blue-400 flex items-center gap-1.5 transition-colors text-left"
@@ -244,6 +482,9 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
                     </button>
                     <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${badgeStyle}`}>
                       {item.statusLabel}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-950 border border-zinc-800 text-zinc-400">
+                      {getMechanicLabel(item.mechanic)}
                     </span>
                   </div>
 
@@ -287,11 +528,17 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
                   <div className="p-2.5 rounded bg-zinc-950/70 border border-zinc-800/80">
                     <span className="text-[10px] text-zinc-500 block uppercase">Reste &amp; Rythme</span>
                     <span className={`text-sm font-semibold ${item.isAchieved ? 'text-emerald-400' : 'text-zinc-200'}`}>
-                      {item.isAchieved ? 'Atteint !' : `+${remainingDisplay}`}
+                      {item.isAchieved
+                        ? 'Atteint !'
+                        : item.remainingWeightLbs <= 0
+                        ? `Valider ${g.targetReps || 8} réps`
+                        : item.mechanic === 'assisted' && g.targetMetric !== '1rm'
+                        ? remainingDisplay
+                        : `+${remainingDisplay}`}
                     </span>
-                    {!item.isAchieved && item.daysRemaining >= 0 && (
+                    {!item.isAchieved && item.daysRemaining >= 0 && item.remainingWeightLbs > 0 && (
                       <span className="text-[10px] text-zinc-500 block mt-0.5">
-                        Requis : {formatGoalPace(item.requiredWeeklyPace, g.targetMetric, unit)}
+                        Requis : {formatGoalPace(item.requiredWeeklyPace, g.targetMetric, unit, item.mechanic)}
                       </span>
                     )}
                   </div>
@@ -397,10 +644,15 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
               
               {/* Exercise Selector */}
               <div className="space-y-1">
-                <label className="text-zinc-400 text-[11px] uppercase">Exercice</label>
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-zinc-400 text-[11px] uppercase">Exercice</label>
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-900 border border-zinc-800 text-zinc-300">
+                    {getMechanicLabel(selectedMeta.mechanic)}
+                  </span>
+                </div>
                 <select
                   value={formExName}
-                  onChange={(e) => setFormExName(e.target.value)}
+                  onChange={(e) => handleExerciseChange(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 p-2 rounded focus:outline-none focus:border-zinc-700"
                 >
                   {availableExercises.map((ex) => (
@@ -414,66 +666,61 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
               {/* Metric Type */}
               <div className="space-y-1">
                 <label className="text-zinc-400 text-[11px] uppercase">Type de métrique</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setFormMetric('1rm')}
-                    className={`p-2 rounded border text-center transition-colors ${
-                      formMetric === '1rm'
-                        ? 'bg-zinc-800 border-zinc-700 text-zinc-100 font-semibold'
-                        : 'bg-zinc-950 border-zinc-800 text-zinc-400'
-                    }`}
-                  >
-                    1RM Estimé
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormMetric('top_weight')}
-                    className={`p-2 rounded border text-center transition-colors ${
-                      formMetric === 'top_weight'
-                        ? 'bg-zinc-800 border-zinc-700 text-zinc-100 font-semibold'
-                        : 'bg-zinc-950 border-zinc-800 text-zinc-400'
-                    }`}
-                  >
-                    Top Set (Charge)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormMetric('reps')}
-                    className={`p-2 rounded border text-center transition-colors ${
-                      formMetric === 'reps'
-                        ? 'bg-zinc-800 border-zinc-700 text-zinc-100 font-semibold'
-                        : 'bg-zinc-950 border-zinc-800 text-zinc-400'
-                    }`}
-                  >
-                    Répétitions (PDC)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormMetric('duration')}
-                    className={`p-2 rounded border text-center transition-colors ${
-                      formMetric === 'duration'
-                        ? 'bg-zinc-800 border-zinc-700 text-zinc-100 font-semibold'
-                        : 'bg-zinc-950 border-zinc-800 text-zinc-400'
-                    }`}
-                  >
-                    Durée (sec)
-                  </button>
+                <div className={`grid gap-2 ${allowedMetrics.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                  {allowedMetrics.map((m) => {
+                    const label =
+                      m === 'duration'
+                        ? 'Durée (sec)'
+                        : m === 'reps'
+                        ? 'Répétitions (PDC)'
+                        : m === '1rm'
+                        ? selectedMeta.mechanic === 'assisted'
+                          ? '1RM Net Estimé'
+                          : '1RM Estimé'
+                        : selectedMeta.mechanic === 'assisted'
+                        ? 'Assistance (-Charge × Réps)'
+                        : selectedMeta.mechanic === 'bodyweight'
+                        ? 'Top Set Lesté (+Charge)'
+                        : 'Top Set (Charge × Réps)';
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => handleMetricChange(m)}
+                        className={`p-2 rounded border text-center transition-colors ${
+                          formMetric === m
+                            ? 'bg-zinc-800 border-zinc-700 text-zinc-100 font-semibold'
+                            : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Target Weight / Reps / Duration */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Target Weight / Reps / Duration & Start Value */}
+              <div className={`grid gap-3 ${formMetric === 'top_weight' ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
                 <div className="space-y-1">
                   <label className="text-zinc-400 text-[11px] uppercase">
                     {formMetric === 'reps'
-                      ? 'Répétitions Cibles'
+                      ? 'Réps Cibles'
                       : formMetric === 'duration'
                       ? 'Durée Cible (sec)'
+                      : selectedMeta.mechanic === 'assisted' && formMetric === 'top_weight'
+                      ? `Assist. Cible (${unit.toUpperCase()})`
+                      : selectedMeta.mechanic === 'bodyweight' && formMetric === 'top_weight'
+                      ? `Lest Cible (${unit.toUpperCase()})`
                       : `Charge Cible (${unit.toUpperCase()})`}
                   </label>
                   <input
                     type="number"
+                    min={
+                      selectedMeta.mechanic === 'assisted' || selectedMeta.mechanic === 'bodyweight'
+                        ? '0'
+                        : '0.5'
+                    }
                     step={formMetric === 'reps' || formMetric === 'duration' ? '1' : '0.5'}
                     value={formWeight}
                     onChange={(e) => setFormWeight(e.target.value)}
@@ -482,36 +729,50 @@ export const GoalsTab: React.FC<GoalsTabProps> = ({
                   />
                 </div>
 
-                {formMetric === 'top_weight' ? (
+                {formMetric === 'top_weight' && (
                   <div className="space-y-1">
                     <label className="text-zinc-400 text-[11px] uppercase">Réps Cibles</label>
                     <input
                       type="number"
+                      min="1"
+                      step="1"
                       value={formReps}
                       onChange={(e) => setFormReps(e.target.value)}
                       className="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 p-2 rounded focus:outline-none focus:border-zinc-700"
                       required
                     />
                   </div>
-                ) : (
-                  <div className="space-y-1">
-                    <label className="text-zinc-400 text-[11px] uppercase">
-                      {formMetric === 'reps'
-                        ? 'Départ (réps)'
-                        : formMetric === 'duration'
-                        ? 'Départ (sec)'
-                        : `Charge de Départ (${unit.toUpperCase()})`}
-                    </label>
-                    <input
-                      type="number"
-                      step={formMetric === 'reps' || formMetric === 'duration' ? '1' : '0.5'}
-                      value={formStartWeight}
-                      onChange={(e) => setFormStartWeight(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 p-2 rounded focus:outline-none focus:border-zinc-700"
-                    />
-                  </div>
                 )}
+
+                <div className="space-y-1">
+                  <label className="text-zinc-400 text-[11px] uppercase">
+                    {formMetric === 'reps'
+                      ? 'Départ (réps)'
+                      : formMetric === 'duration'
+                      ? 'Départ (sec)'
+                      : selectedMeta.mechanic === 'assisted' && formMetric === 'top_weight'
+                      ? `Assist. Départ (${unit.toUpperCase()})`
+                      : selectedMeta.mechanic === 'bodyweight' && formMetric === 'top_weight'
+                      ? `Lest Départ (${unit.toUpperCase()})`
+                      : `Départ (${unit.toUpperCase()})`}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step={formMetric === 'reps' || formMetric === 'duration' ? '1' : '0.5'}
+                    value={formStartWeight}
+                    onChange={(e) => setFormStartWeight(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 p-2 rounded focus:outline-none focus:border-zinc-700"
+                    required
+                  />
+                </div>
               </div>
+
+              {selectedMeta.mechanic === 'assisted' && formMetric === 'top_weight' && (
+                <p className="text-[11px] text-zinc-400 bg-zinc-950/80 border border-zinc-800/80 p-2 rounded">
+                  Plus l&apos;assistance est basse, plus l&apos;exercice est difficile (0 = sans assistance au poids du corps).
+                </p>
+              )}
 
               {/* Target Date */}
               <div className="space-y-1">

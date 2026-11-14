@@ -1,4 +1,4 @@
-import { WorkoutGoal, GoalProgress, WorkoutSession, UnitSystem } from './types';
+import { ExerciseMechanic, WorkoutGoal, GoalProgress, WorkoutSession, UnitSystem } from './types';
 import { getExerciseMeta } from './taxonomy';
 import { formatWeight, lbsToKg } from './analytics';
 
@@ -7,7 +7,8 @@ const STORAGE_KEY = 'gymbro_workout_goals_v1';
 export function formatGoalValue(
   valLbs: number,
   metric: WorkoutGoal['targetMetric'],
-  unit: UnitSystem
+  unit: UnitSystem,
+  mechanic?: ExerciseMechanic
 ): string {
   if (metric === 'reps') {
     return `${Math.round(valLbs)} réps`;
@@ -15,20 +16,33 @@ export function formatGoalValue(
   if (metric === 'duration') {
     return `${Math.round(valLbs)} sec`;
   }
+  if (mechanic === 'assisted' && metric !== '1rm') {
+    if (valLbs <= 0) {
+      return `0 ${unit} (PDC)`;
+    }
+    return `-${formatWeight(valLbs, unit)}`;
+  }
   return formatWeight(valLbs, unit);
 }
 
 export function formatGoalMetricLabel(goal: WorkoutGoal): string {
-  if (goal.targetMetric === '1rm') return '1RM Estimé';
+  const meta = getExerciseMeta(goal.exerciseName);
+  if (goal.targetMetric === '1rm') {
+    return meta.mechanic === 'assisted' ? '1RM Net Estimé' : '1RM Estimé';
+  }
   if (goal.targetMetric === 'reps') return 'Série Max (PDC)';
   if (goal.targetMetric === 'duration') return 'Temps de maintien';
+  if (meta.mechanic === 'assisted') {
+    return `Assistance (${goal.targetReps || 8} réps)`;
+  }
   return `Top Set (${goal.targetReps || 8} réps)`;
 }
 
 export function formatGoalPace(
   pacePerWeek: number,
   metric: WorkoutGoal['targetMetric'],
-  unit: UnitSystem
+  unit: UnitSystem,
+  mechanic?: ExerciseMechanic
 ): string {
   if (metric === 'reps') {
     return `+${Math.round(pacePerWeek * 10) / 10} rép/sem`;
@@ -37,6 +51,9 @@ export function formatGoalPace(
     return `+${Math.round(pacePerWeek * 10) / 10} sec/sem`;
   }
   const val = unit === 'kg' ? lbsToKg(pacePerWeek) : Math.round(pacePerWeek * 10) / 10;
+  if (mechanic === 'assisted' && metric !== '1rm') {
+    return `-${val} ${unit}/sem`;
+  }
   return `+${val} ${unit}/sem`;
 }
 
@@ -186,75 +203,146 @@ export function calculateGoalProgress(
 ): GoalProgress {
   const meta = getExerciseMeta(goal.exerciseName);
 
-  // Filter sessions starting from createdAt so current block goals track the active block
-  const relevant = goal.createdAt
-    ? sessions.filter((s) => s.dateStr >= goal.createdAt)
-    : sessions;
+  // Filter sessions across the active training block so goals created mid-block still read block history
+  const blockStart = !goal.createdAt || goal.createdAt >= '2026-08-01' ? '2026-08-01' : goal.createdAt;
+  const relevant = sessions.filter((s) => s.dateStr >= blockStart);
   const sessionsToScan = relevant.length > 0 ? relevant : sessions;
 
-  // Extract all sets of this exercise
-  let bestValue = 0;
+  const isAssistedReduction = meta.mechanic === 'assisted' && goal.targetMetric === 'top_weight';
+  const minRepsRequired = goal.targetMetric === 'top_weight' ? goal.targetReps || 8 : 1;
+
   let achievedDate: string | undefined = undefined;
   let firstExerciseDate: string | undefined = undefined;
 
-  // We look chronologically to find best performance, first session date, and achievement date
-  for (const s of sessionsToScan) {
-    const ex = s.exercises.find((e) => e.name === goal.exerciseName);
-    if (!ex) continue;
-
-    if (!firstExerciseDate) {
-      firstExerciseDate = s.dateStr;
-    }
-
-    for (const st of ex.sets) {
-      if (st.isWarmup) continue;
-
-      let val = 0;
-      if (goal.targetMetric === 'duration') {
-        val = st.durationSeconds;
-      } else if (goal.targetMetric === 'reps') {
-        val = st.reps;
-      } else if (goal.targetMetric === '1rm') {
-        val = meta.mechanic === 'assisted'
-          ? Math.round(Math.max(5, bodyweightLbs - st.weightLbs) * (1 + st.reps / 30))
-          : st.estimated1rmLbs;
-      } else {
-        // 'top_weight'
-        if (goal.targetReps && goal.targetReps > 1) {
-          if (st.reps >= goal.targetReps) {
-            val = meta.mechanic === 'assisted'
-              ? Math.max(5, bodyweightLbs - st.weightLbs)
-              : st.weightLbs;
-          }
-        } else {
-          val = meta.mechanic === 'assisted'
-            ? Math.max(5, bodyweightLbs - st.weightLbs)
-            : st.weightLbs;
-        }
-      }
-
-      if (val > bestValue) {
-        bestValue = val;
-        if (val >= goal.targetWeightLbs && !achievedDate) {
-          achievedDate = s.dateStr;
-        }
-      }
-    }
-  }
-
-  const startVal = goal.startWeightLbs;
+  let startVal = goal.startWeightLbs;
   const targetVal = goal.targetWeightLbs;
-  const isAchieved = bestValue >= targetVal;
-
-  // Calculate percentage
+  let currentValue = 0;
   let progressPercent = 0;
-  if (targetVal <= startVal) {
-    progressPercent = isAchieved ? 100 : 0;
-  } else {
-    progressPercent = Math.min(100, Math.max(0, Math.round(((bestValue - startVal) / (targetVal - startVal)) * 100)));
-  }
+  let remainingWeightLbs = 0;
+  let isAchieved = false;
+  let gainedSoFar = 0;
 
-  const remainingWeightLbs = Math.max(0, Math.round((targetVal - bestValue) * 10) / 10);
+  if (isAssistedReduction) {
+    let firstSessionAssistance: number | undefined = undefined;
+    let bestAssistance = Infinity;
+    let overallMinAssistance = Infinity;
+    let hasValidRepSet = false;
+
+    for (const s of sessionsToScan) {
+      const ex = s.exercises.find((e) => e.name === goal.exerciseName);
+      if (!ex) continue;
+
+      if (!firstExerciseDate) {
+        firstExerciseDate = s.dateStr;
+        const workingFirst = ex.sets.filter((st) => !st.isWarmup);
+        const pool = workingFirst.length > 0 ? workingFirst : ex.sets;
+        if (pool.length > 0) {
+          firstSessionAssistance = Math.max(...pool.map((st) => st.weightLbs));
+        }
+      }
+
+      for (const st of ex.sets) {
+        if (st.isWarmup) continue;
+
+        if (st.weightLbs < overallMinAssistance) {
+          overallMinAssistance = st.weightLbs;
+        }
+
+        if (st.reps >= minRepsRequired) {
+          hasValidRepSet = true;
+          if (st.weightLbs < bestAssistance) {
+            bestAssistance = st.weightLbs;
+          }
+          if (st.weightLbs <= targetVal && !achievedDate) {
+            achievedDate = s.dateStr;
+          }
+        }
+      }
+    }
+
+    if (
+      firstSessionAssistance !== undefined &&
+      (!Number.isFinite(startVal) || startVal <= targetVal || startVal === 135)
+    ) {
+      startVal = firstSessionAssistance;
+    } else if (!Number.isFinite(startVal)) {
+      startVal = targetVal;
+    }
+
+    currentValue = hasValidRepSet
+      ? bestAssistance
+      : Number.isFinite(overallMinAssistance)
+      ? overallMinAssistance
+      : startVal;
+
+    isAchieved = hasValidRepSet && currentValue <= targetVal;
+
+    if (startVal <= targetVal) {
+      progressPercent = isAchieved ? 100 : 0;
+    } else {
+      const rawPct = Math.round(((startVal - currentValue) / (startVal - targetVal)) * 100);
+      progressPercent = isAchieved ? 100 : Math.min(95, Math.max(0, rawPct));
+    }
+
+    remainingWeightLbs = isAchieved ? 0 : Math.max(0, Math.round((currentValue - targetVal) * 10) / 10);
+    gainedSoFar = Math.max(0, startVal - currentValue);
+  } else {
+    let bestValue = 0;
+    let nearRepBestValue = 0;
+
+    for (const s of sessionsToScan) {
+      const ex = s.exercises.find((e) => e.name === goal.exerciseName);
+      if (!ex) continue;
+
+      if (!firstExerciseDate) {
+        firstExerciseDate = s.dateStr;
+      }
+
+      for (const st of ex.sets) {
+        if (st.isWarmup) continue;
+
+        let val = 0;
+        if (goal.targetMetric === 'duration') {
+          val = st.durationSeconds;
+        } else if (goal.targetMetric === 'reps') {
+          val = st.reps;
+        } else if (goal.targetMetric === '1rm') {
+          val = meta.mechanic === 'assisted'
+            ? Math.round(Math.max(5, bodyweightLbs - st.weightLbs) * (1 + st.reps / 30))
+            : st.estimated1rmLbs;
+        } else {
+          // 'top_weight' (standard or weighted bodyweight)
+          if (st.reps >= minRepsRequired) {
+            val = st.weightLbs;
+          } else if (st.reps >= Math.max(1, minRepsRequired - 2)) {
+            if (st.weightLbs > nearRepBestValue) {
+              nearRepBestValue = st.weightLbs;
+            }
+          }
+        }
+
+        if (val > bestValue) {
+          bestValue = val;
+          if (val >= targetVal && !achievedDate) {
+            achievedDate = s.dateStr;
+          }
+        }
+      }
+    }
+
+    currentValue = bestValue > 0 ? bestValue : nearRepBestValue > 0 ? nearRepBestValue : startVal;
+    isAchieved = bestValue >= targetVal;
+
+    if (targetVal <= startVal) {
+      progressPercent = isAchieved ? 100 : 0;
+    } else {
+      const rawPct = Math.round(((currentValue - startVal) / (targetVal - startVal)) * 100);
+      progressPercent = isAchieved ? 100 : Math.min(95, Math.max(0, rawPct));
+    }
+
+    remainingWeightLbs = Math.max(0, Math.round((targetVal - currentValue) * 10) / 10);
+    gainedSoFar = Math.max(0, currentValue - startVal);
+  }
 
   // Temporal pace & projection relative to effectiveStartDate -> targetDate
   const effectiveStartDate = firstExerciseDate || goal.createdAt || '2026-08-01';
@@ -272,7 +360,6 @@ export function calculateGoalProgress(
 
   const weeksElapsed = Math.max(1, elapsedMs / (7 * 24 * 3600 * 1000));
   const weeksRemaining = Math.max(0.5, Math.max(1, daysRemaining) / 7);
-  const gainedSoFar = Math.max(0, bestValue - startVal);
   const currentWeeklyPace = Math.round((gainedSoFar / weeksElapsed) * 10) / 10;
   const requiredWeeklyPace = isAchieved
     ? 0
@@ -313,7 +400,8 @@ export function calculateGoalProgress(
 
   return {
     goal,
-    currentValueLbs: bestValue,
+    mechanic: meta.mechanic,
+    currentValueLbs: currentValue,
     startValueLbs: startVal,
     targetValueLbs: targetVal,
     progressPercent,

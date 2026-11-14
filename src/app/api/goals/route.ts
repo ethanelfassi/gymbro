@@ -18,7 +18,7 @@ function isValidGoal(value: unknown): value is WorkoutGoal {
       g.targetMetric === 'duration') &&
     typeof g.targetWeightLbs === 'number' &&
     Number.isFinite(g.targetWeightLbs) &&
-    g.targetWeightLbs > 0 &&
+    g.targetWeightLbs >= 0 &&
     typeof g.targetDate === 'string' &&
     g.targetDate.trim().length > 0
   );

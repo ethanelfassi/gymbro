@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { WorkoutSession, UnitSystem, WorkoutGoal } from '@/lib/types';
-import { formatWeight, lbsToKg, estimate1rm } from '@/lib/analytics';
+import { lbsToKg, estimate1rm } from '@/lib/analytics';
 import { calculateGoalProgress, formatGoalValue, formatGoalMetricLabel, formatGoalPace } from '@/lib/goals';
-import { getExerciseMeta } from '@/lib/taxonomy';
+import { getExerciseMeta, getMechanicLabel } from '@/lib/taxonomy';
 import { Search, Trophy, History, FileText, Target } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -72,6 +72,12 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
   const currentEx = selectedExerciseName || (exerciseList.length > 0 ? exerciseList[0].name : '');
   const currentMeta = useMemo(() => getExerciseMeta(currentEx), [currentEx]);
 
+  // Adapt effective-load default cleanly to exercise mechanic:
+  // assisted -> true (net load progression); bodyweight -> false (pure reps progression)
+  useEffect(() => {
+    setUseEffectiveLoad(currentMeta.mechanic === 'assisted');
+  }, [currentEx, currentMeta.mechanic]);
+
   // Filtered exercise options for sidebar/dropdown
   const filteredExercises = useMemo(() => {
     return exerciseList.filter((item) => {
@@ -95,7 +101,9 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
       date: string;
       topWeight: number;
       rawTopWeight: number;
+      netTopWeight: number;
       topReps: number;
+      totalReps: number;
       topSetScore: number;
       est1rm: number;
       volume: number;
@@ -113,13 +121,16 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
       const setsToUse = workingSets.length > 0 ? workingSets : ex.sets;
       const topDuration = ex.topSetDurationSeconds || Math.max(0, ...setsToUse.map((st) => st.durationSeconds));
       const totalDuration = ex.totalDurationSeconds || setsToUse.reduce((acc, st) => acc + st.durationSeconds, 0);
+      const totalReps = setsToUse.reduce((acc, st) => acc + st.reps, 0);
 
       if (currentMeta.mechanic === 'duration') {
         data.push({
           date: s.dateStr,
           topWeight: 0,
           rawTopWeight: 0,
+          netTopWeight: 0,
           topReps: ex.topSetReps,
+          totalReps,
           topSetScore: topDuration,
           est1rm: topDuration,
           volume: totalDuration,
@@ -131,26 +142,35 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
         continue;
       }
 
+      const netTopLbs =
+        currentMeta.mechanic === 'assisted'
+          ? Math.max(5, bodyweightLbs - ex.topSetWeightLbs)
+          : currentMeta.mechanic === 'bodyweight'
+          ? bodyweightLbs + ex.topSetWeightLbs
+          : ex.topSetWeightLbs;
+
       let est1rm = ex.topSet1rmLbs;
       let topWeight = ex.topSetWeightLbs;
       let rawVolumeLbs = ex.totalVolumeLbs;
 
       if (currentMeta.mechanic === 'assisted') {
+        est1rm = estimate1rm(netTopLbs, ex.topSetReps);
         if (useEffectiveLoad) {
-          topWeight = Math.max(5, bodyweightLbs - ex.topSetWeightLbs);
-          est1rm = estimate1rm(topWeight, ex.topSetReps);
+          topWeight = netTopLbs;
           rawVolumeLbs = setsToUse.reduce(
             (acc, st) => acc + Math.max(5, bodyweightLbs - st.weightLbs) * st.reps,
             0
           );
         } else {
           topWeight = ex.topSetWeightLbs;
-          est1rm = estimate1rm(topWeight, ex.topSetReps);
-          rawVolumeLbs = setsToUse.reduce((acc, st) => acc + st.weightLbs * st.reps, 0);
+          rawVolumeLbs = setsToUse.reduce(
+            (acc, st) => acc + Math.max(5, bodyweightLbs - st.weightLbs) * st.reps,
+            0
+          );
         }
       } else if (currentMeta.mechanic === 'bodyweight') {
         if (useEffectiveLoad) {
-          topWeight = bodyweightLbs + ex.topSetWeightLbs;
+          topWeight = netTopLbs;
           est1rm = estimate1rm(topWeight, ex.topSetReps);
           rawVolumeLbs = setsToUse.reduce(
             (acc, st) => acc + (bodyweightLbs + st.weightLbs) * st.reps,
@@ -159,16 +179,16 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
         } else {
           topWeight = ex.topSetWeightLbs;
           est1rm = topWeight > 0 ? estimate1rm(topWeight, ex.topSetReps) : ex.topSetReps;
-          rawVolumeLbs = setsToUse.reduce(
-            (acc, st) => acc + (st.weightLbs > 0 ? st.weightLbs * st.reps : st.reps),
-            0
-          );
+          rawVolumeLbs = totalReps;
         }
       }
 
       const displayWeight = unit === 'kg' ? lbsToKg(topWeight) : topWeight;
+      const netDisplayWeight = unit === 'kg' ? lbsToKg(netTopLbs) : netTopLbs;
       const topSetScore =
-        displayWeight > 0
+        currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad && ex.topSetWeightLbs === 0
+          ? ex.topSetReps
+          : displayWeight > 0
           ? Math.round(displayWeight * ex.topSetReps * 10) / 10
           : ex.topSetReps;
 
@@ -176,7 +196,9 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
         date: s.dateStr,
         topWeight: displayWeight,
         rawTopWeight: ex.topSetWeightLbs,
+        netTopWeight: netDisplayWeight,
         topReps: ex.topSetReps,
+        totalReps,
         topSetScore,
         est1rm:
           currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad && ex.topSetWeightLbs === 0
@@ -185,8 +207,8 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
             ? lbsToKg(est1rm)
             : est1rm,
         volume:
-          currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad && ex.topSetWeightLbs === 0
-            ? rawVolumeLbs
+          currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad
+            ? totalReps
             : unit === 'kg'
             ? lbsToKg(rawVolumeLbs)
             : rawVolumeLbs,
@@ -282,6 +304,41 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
     };
   }, [exerciseData]);
 
+  // Bodyweight records (for bodyweight exercises like Dips, Tractions, Pompes)
+  const bodyweightRecords = useMemo(() => {
+    let maxReps = 0;
+    let maxRepsDate = '';
+    let maxSessionTotalReps = 0;
+    let maxSessionDate = '';
+    let setsOver8Reps = 0;
+    let totalCumulativeReps = 0;
+
+    for (const d of exerciseData) {
+      if (d.totalReps > maxSessionTotalReps) {
+        maxSessionTotalReps = d.totalReps;
+        maxSessionDate = d.date;
+      }
+      for (const st of d.sets) {
+        if (st.isWarmup) continue;
+        totalCumulativeReps += st.reps;
+        if (st.reps >= 8) setsOver8Reps++;
+        if (st.reps > maxReps) {
+          maxReps = st.reps;
+          maxRepsDate = d.date;
+        }
+      }
+    }
+
+    return {
+      maxReps,
+      maxRepsDate,
+      maxSessionTotalReps,
+      maxSessionDate,
+      setsOver8Reps,
+      totalCumulativeReps,
+    };
+  }, [exerciseData]);
+
   // Extract unique notes for this exercise (including machine notes from any log)
   const exerciseNotes = useMemo(() => {
     const fromMap = allExerciseNotes?.get(currentEx) || [];
@@ -313,21 +370,47 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
       if (metricView === 'top_set') return 'totalDuration' as const;
       return 'workingSetsCount' as const;
     }
+    if (currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad) {
+      if (metricView === '1rm') return 'topReps' as const;
+      if (metricView === 'top_set') return 'totalReps' as const;
+      return 'workingSetsCount' as const;
+    }
+    if (currentMeta.mechanic === 'assisted' && !useEffectiveLoad) {
+      if (metricView === '1rm') return 'est1rm' as const;
+      if (metricView === 'top_set') return 'topWeight' as const;
+      return 'totalReps' as const;
+    }
     if (metricView === '1rm') return 'est1rm' as const;
     if (metricView === 'top_set') return 'topSetScore' as const;
     return 'volume' as const;
-  }, [currentMeta.mechanic, metricView]);
+  }, [currentMeta.mechanic, useEffectiveLoad, metricView]);
 
   // Target value for chart reference line if metric aligns
   const targetValueForChart = useMemo(() => {
     if (!activeGoal) return null;
     if (currentMeta.mechanic === 'duration' && activeGoal.targetMetric === 'duration') {
-      if (metricView === '1rm') return activeGoal.targetWeightLbs;
-      return null;
+      return metricView === '1rm' ? activeGoal.targetWeightLbs : null;
     }
-    if (activeGoal.targetMetric === 'reps' && !useEffectiveLoad) {
-      if (metricView === 'top_set' || metricView === '1rm') {
-        return activeGoal.targetWeightLbs;
+    if (currentMeta.mechanic === 'bodyweight' && activeGoal.targetMetric === 'reps' && !useEffectiveLoad) {
+      return metricView === '1rm' ? activeGoal.targetWeightLbs : null;
+    }
+    if (currentMeta.mechanic === 'assisted') {
+      if (activeGoal.targetMetric === '1rm' && metricView === '1rm') {
+        return unit === 'kg' ? lbsToKg(activeGoal.targetWeightLbs) : activeGoal.targetWeightLbs;
+      }
+      if (activeGoal.targetMetric === 'top_weight') {
+        if (!useEffectiveLoad && metricView === 'top_set') {
+          return unit === 'kg' ? lbsToKg(activeGoal.targetWeightLbs) : activeGoal.targetWeightLbs;
+        }
+        const netTargetLbs = Math.max(5, bodyweightLbs - activeGoal.targetWeightLbs);
+        if (metricView === '1rm') {
+          const net1rm = estimate1rm(netTargetLbs, activeGoal.targetReps || 8);
+          return unit === 'kg' ? lbsToKg(net1rm) : net1rm;
+        }
+        if (useEffectiveLoad && metricView === 'top_set') {
+          const load = unit === 'kg' ? lbsToKg(netTargetLbs) : netTargetLbs;
+          return Math.round(load * (activeGoal.targetReps || 1) * 10) / 10;
+        }
       }
       return null;
     }
@@ -335,11 +418,15 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
       return unit === 'kg' ? lbsToKg(activeGoal.targetWeightLbs) : activeGoal.targetWeightLbs;
     }
     if (metricView === 'top_set' && activeGoal.targetMetric === 'top_weight') {
-      const load = unit === 'kg' ? lbsToKg(activeGoal.targetWeightLbs) : activeGoal.targetWeightLbs;
+      const baseLbs =
+        currentMeta.mechanic === 'bodyweight' && useEffectiveLoad
+          ? bodyweightLbs + activeGoal.targetWeightLbs
+          : activeGoal.targetWeightLbs;
+      const load = unit === 'kg' ? lbsToKg(baseLbs) : baseLbs;
       return Math.round(load * (activeGoal.targetReps || 1) * 10) / 10;
     }
     return null;
-  }, [activeGoal, metricView, unit, currentMeta.mechanic, useEffectiveLoad]);
+  }, [activeGoal, metricView, unit, currentMeta.mechanic, useEffectiveLoad, bodyweightLbs]);
 
   const yDomain = useMemo(() => {
     if (exerciseData.length === 0) return ['auto', 'auto'];
@@ -432,6 +519,9 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
               <span className="text-xs font-mono px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300">
                 {currentMeta.category} &bull; {currentMeta.primaryMuscle}
               </span>
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-zinc-400">
+                {getMechanicLabel(currentMeta.mechanic)}
+              </span>
             </div>
             <p className="text-xs text-zinc-500 font-mono mt-1">
               {exerciseData.length} séances enregistrées dans cette période
@@ -446,11 +536,11 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                 className={`px-2.5 py-1 rounded text-xs font-mono border transition-colors ${
                   useEffectiveLoad
                     ? 'bg-zinc-800 border-zinc-700 text-zinc-200'
-                    : 'bg-zinc-950 border-zinc-800 text-zinc-500'
+                    : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200'
                 }`}
-                title="Déduire l'assistance du poids de corps pour afficher la charge réelle soulevée"
+                title="Basculer entre charge nette soulevée (PDC - Assistance) et assistance brute sur la machine"
               >
-                Charge nette (PDC - Assistance)
+                {useEffectiveLoad ? 'Charge nette (PDC - Assist.)' : 'Assistance brute (-lbs)'}
               </button>
             )}
             {currentMeta.mechanic === 'bodyweight' && (
@@ -459,11 +549,11 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                 className={`px-2.5 py-1 rounded text-xs font-mono border transition-colors ${
                   useEffectiveLoad
                     ? 'bg-zinc-800 border-zinc-700 text-zinc-200'
-                    : 'bg-zinc-950 border-zinc-800 text-zinc-500'
+                    : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200'
                 }`}
-                title="Inclure le poids de corps dans le calcul de charge et de 1RM"
+                title="Basculer entre répétitions pures au poids du corps et charge équivalente (PDC inclus)"
               >
-                Charge totale (PDC inclus)
+                {useEffectiveLoad ? 'Charge totale (PDC inclus)' : 'Mode Poids du Corps (Réps)'}
               </button>
             )}
 
@@ -475,7 +565,13 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                   metricView === '1rm' ? 'bg-zinc-800 text-zinc-100 font-medium' : 'text-zinc-400'
                 }`}
               >
-                {currentMeta.mechanic === 'duration' ? 'Meilleure Série (sec)' : '1RM Estimé'}
+                {currentMeta.mechanic === 'duration'
+                  ? 'Meilleure Série (sec)'
+                  : currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad
+                  ? 'Meilleure Série (Réps)'
+                  : currentMeta.mechanic === 'assisted'
+                  ? '1RM Net Estimé'
+                  : '1RM Estimé'}
               </button>
               <button
                 onClick={() => setMetricView('top_set')}
@@ -485,13 +581,19 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                 title={
                   currentMeta.mechanic === 'duration'
                     ? 'Durée cumulée sur toute la séance'
+                    : currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad
+                    ? 'Nombre total de répétitions sur la séance'
+                    : currentMeta.mechanic === 'assisted' && !useEffectiveLoad
+                    ? 'Assistance utilisée sur le top set'
                     : 'Top Set trié par Charge × Réps'
                 }
               >
                 {currentMeta.mechanic === 'duration'
                   ? 'Temps Cumulé (sec)'
                   : currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad
-                  ? 'Top Set (Réps)'
+                  ? 'Réps Cumulées'
+                  : currentMeta.mechanic === 'assisted' && !useEffectiveLoad
+                  ? `Assistance (-${unit})`
                   : 'Top Set (Charge × Réps)'}
               </button>
               <button
@@ -500,7 +602,11 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                   metricView === 'volume' ? 'bg-zinc-800 text-zinc-100 font-medium' : 'text-zinc-400'
                 }`}
               >
-                {currentMeta.mechanic === 'duration' ? 'Séries Effectives' : 'Volume Total'}
+                {currentMeta.mechanic === 'duration' || (currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad)
+                  ? 'Séries Effectives'
+                  : currentMeta.mechanic === 'assisted' && !useEffectiveLoad
+                  ? 'Total Réps Séance'
+                  : 'Volume Total'}
               </button>
             </div>
           </div>
@@ -513,7 +619,7 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <Target className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span className="text-xs font-mono font-semibold uppercase tracking-wider text-zinc-200">
-                  Objectif Actif : {formatGoalMetricLabel(activeGoal)} &bull; {formatGoalValue(activeGoal.targetWeightLbs, activeGoal.targetMetric, unit)}
+                  Objectif Actif : {formatGoalMetricLabel(activeGoal)} &bull; {formatGoalValue(activeGoal.targetWeightLbs, activeGoal.targetMetric, unit, goalProgress.mechanic)}
                 </span>
                 {activeGoal.note && (
                   <span className="text-[11px] text-zinc-400 font-mono">
@@ -549,14 +655,14 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
             <div className="space-y-1.5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs font-mono">
                 <span className="text-zinc-400">
-                  Actuel : <span className="text-zinc-100 font-semibold">{formatGoalValue(goalProgress.currentValueLbs, activeGoal.targetMetric, unit)}</span>
-                  {' '}/ Cible : <span className="text-zinc-100 font-semibold">{formatGoalValue(goalProgress.targetValueLbs, activeGoal.targetMetric, unit)}</span>
+                  Actuel : <span className="text-zinc-100 font-semibold">{formatGoalValue(goalProgress.currentValueLbs, activeGoal.targetMetric, unit, goalProgress.mechanic)}</span>
+                  {' '}/ Cible : <span className="text-zinc-100 font-semibold">{formatGoalValue(goalProgress.targetValueLbs, activeGoal.targetMetric, unit, goalProgress.mechanic)}</span>
                 </span>
                 <span className="font-semibold text-zinc-200">
                   {goalProgress.progressPercent}%
                   {goalProgress.remainingWeightLbs > 0 && (
                     <span className="text-zinc-500 font-normal ml-1">
-                      (reste {formatGoalValue(goalProgress.remainingWeightLbs, activeGoal.targetMetric, unit)} &bull; requis : {formatGoalPace(goalProgress.requiredWeeklyPace, activeGoal.targetMetric, unit)})
+                      (reste {formatGoalValue(goalProgress.remainingWeightLbs, activeGoal.targetMetric, unit, goalProgress.mechanic)} &bull; requis : {formatGoalPace(goalProgress.requiredWeeklyPace, activeGoal.targetMetric, unit, goalProgress.mechanic)})
                     </span>
                   )}
                 </span>
@@ -633,6 +739,36 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                                 Séries : {item.workingSetsCount}
                               </div>
                             </>
+                          ) : currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad ? (
+                            <>
+                              <div className="text-zinc-300">
+                                Meilleure série :{' '}
+                                <span className="font-semibold text-zinc-100">
+                                  {item.rawTopWeight > 0 ? `+${item.topWeight} ${unit}` : 'PDC'} &times; {item.topReps} réps
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-zinc-400">
+                                Réps cumulées : <span className="font-semibold text-emerald-400">{item.totalReps} réps</span>
+                              </div>
+                              <div className="text-[10px] text-zinc-500">
+                                Séries effectives : {item.workingSetsCount}
+                              </div>
+                            </>
+                          ) : currentMeta.mechanic === 'assisted' && !useEffectiveLoad ? (
+                            <>
+                              <div className="text-zinc-300">
+                                Assistance Top Set :{' '}
+                                <span className="font-semibold text-zinc-100">
+                                  -{item.topWeight} {unit} &times; {item.topReps} réps
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-zinc-400">
+                                Charge nette : <span className="font-semibold text-emerald-400">{item.netTopWeight} {unit}</span> (1RM Net : {item.est1rm} {unit})
+                              </div>
+                              <div className="text-[10px] text-zinc-500">
+                                Total séance : {item.totalReps} réps ({item.workingSetsCount} séries)
+                              </div>
+                            </>
                           ) : metricView === 'top_set' ? (
                             <>
                               <div className="text-zinc-300">
@@ -641,23 +777,34 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                                   {item.topWeight > 0 ? `${item.topWeight} ${unit}` : 'PDC'} &times; {item.topReps} réps
                                 </span>
                               </div>
+                              {currentMeta.mechanic === 'assisted' && (
+                                <div className="text-[10px] text-zinc-400">
+                                  Assistance machine : -{unit === 'kg' ? lbsToKg(item.rawTopWeight) : item.rawTopWeight} {unit}
+                                </div>
+                              )}
                               <div className="text-[11px] text-zinc-400">
                                 Score (Charge &times; Réps) : <span className="font-semibold text-emerald-400">{item.topSetScore} {item.topWeight > 0 ? unit : 'réps'}</span>
                               </div>
                               <div className="text-[10px] text-zinc-500">
-                                1RM Estimé : {item.est1rm} {item.topWeight > 0 ? unit : 'réps'}
+                                {currentMeta.mechanic === 'assisted' ? '1RM Net Estimé' : '1RM Estimé'} : {item.est1rm} {item.topWeight > 0 ? unit : 'réps'}
                               </div>
                             </>
                           ) : metricView === '1rm' ? (
                             <>
                               <div className="text-zinc-300">
-                                {item.topWeight > 0 ? '1RM Estimé' : 'Top Réps'} :{' '}
+                                {currentMeta.mechanic === 'assisted' ? '1RM Net Estimé' : item.topWeight > 0 ? '1RM Estimé' : 'Top Réps'} :{' '}
                                 <span className="font-semibold text-zinc-100">
                                   {item.est1rm} {item.topWeight > 0 ? unit : 'réps'}
                                 </span>
                               </div>
                               <div className="text-[11px] text-zinc-400">
-                                Top Set : {item.topWeight > 0 ? `${item.topWeight} ${unit}` : 'PDC'} &times; {item.topReps} réps
+                                Top Set :{' '}
+                                {currentMeta.mechanic === 'assisted'
+                                  ? `-${unit === 'kg' ? lbsToKg(item.rawTopWeight) : item.rawTopWeight} ${unit} (assist.)`
+                                  : item.topWeight > 0
+                                  ? `${item.topWeight} ${unit}`
+                                  : 'PDC'}{' '}
+                                &times; {item.topReps} réps
                               </div>
                             </>
                           ) : (
@@ -666,7 +813,13 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                                 Volume séance : <span className="font-semibold text-zinc-100">{item.volume} {item.topWeight > 0 ? unit : 'réps'}</span>
                               </div>
                               <div className="text-[11px] text-zinc-400">
-                                Top Set : {item.topWeight > 0 ? `${item.topWeight} ${unit}` : 'PDC'} &times; {item.topReps}
+                                Top Set :{' '}
+                                {currentMeta.mechanic === 'assisted'
+                                  ? `-${unit === 'kg' ? lbsToKg(item.rawTopWeight) : item.rawTopWeight} ${unit} (assist.)`
+                                  : item.topWeight > 0
+                                  ? `${item.topWeight} ${unit}`
+                                  : 'PDC'}{' '}
+                                &times; {item.topReps}
                               </div>
                             </>
                           )}
@@ -688,12 +841,19 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                       stroke="#F59E0B"
                       strokeDasharray="4 4"
                       label={{
-                        value: `Cible: ${targetValueForChart} ${
-                          currentMeta.mechanic === 'duration'
-                            ? 'sec'
-                            : activeGoal?.targetMetric === 'reps' && !useEffectiveLoad
-                            ? 'réps'
-                            : unit
+                        value: `Cible: ${
+                          currentMeta.mechanic === 'assisted' &&
+                          !useEffectiveLoad &&
+                          activeGoal?.targetMetric === 'top_weight' &&
+                          metricView === 'top_set'
+                            ? `-${targetValueForChart} ${unit}`
+                            : `${targetValueForChart} ${
+                                currentMeta.mechanic === 'duration'
+                                  ? 'sec'
+                                  : activeGoal?.targetMetric === 'reps' && !useEffectiveLoad
+                                  ? 'réps'
+                                  : unit
+                              }`
                         }`,
                         fill: '#F59E0B',
                         fontSize: 10,
@@ -732,13 +892,15 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
           </div>
         )}
 
-        {/* Rep PRs / Duration PRs Table */}
+        {/* Rep PRs / Bodyweight PRs / Duration PRs Table */}
         <div className="p-5 rounded-lg bg-zinc-900/40 border border-zinc-800">
           <div className="flex items-center gap-2 mb-3">
             <Trophy className="w-4 h-4 text-zinc-400" />
             <h3 className="text-xs font-mono font-semibold uppercase tracking-wider text-zinc-200">
               {currentMeta.mechanic === 'duration'
                 ? 'Records de Maintien & Endurance'
+                : currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad
+                ? 'Records au Poids du Corps (PDC)'
                 : 'Tableau des Records Personnels par Palier de Répétitions'}
             </h3>
           </div>
@@ -782,6 +944,53 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                 </div>
               </div>
             </div>
+          ) : currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-xs">
+              <div className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80">
+                <div className="text-[11px] text-zinc-500">Record sur 1 Série</div>
+                <div className="mt-1 font-semibold text-zinc-100">
+                  {bodyweightRecords.maxReps} réps
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  {bodyweightRecords.maxRepsDate ? bodyweightRecords.maxRepsDate.slice(2) : '—'}
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80">
+                <div className="text-[11px] text-zinc-500">Cumul Séance Max</div>
+                <div className="mt-1 font-semibold text-zinc-100">
+                  {bodyweightRecords.maxSessionTotalReps} réps
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  {bodyweightRecords.maxSessionDate ? bodyweightRecords.maxSessionDate.slice(2) : '—'}
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80">
+                <div className="text-[11px] text-zinc-500">Séries &ge; 8 réps</div>
+                <div className="mt-1 font-semibold text-zinc-100">
+                  {bodyweightRecords.setsOver8Reps}
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  Total : {bodyweightRecords.totalCumulativeReps} réps
+                </div>
+              </div>
+              <div className="p-2.5 rounded bg-zinc-900/80 border border-zinc-800/80">
+                <div className="text-[11px] text-zinc-500">
+                  {activeGoal ? 'Progression Objectif' : 'Palier 15 réps'}
+                </div>
+                <div className="mt-1 font-semibold text-zinc-100">
+                  {goalProgress
+                    ? `${goalProgress.progressPercent}%`
+                    : `${Math.min(100, Math.round((bodyweightRecords.maxReps / 15) * 100))}%`}
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  {goalProgress && activeGoal
+                    ? `Cible : ${formatGoalValue(activeGoal.targetWeightLbs, activeGoal.targetMetric, unit, 'bodyweight')}`
+                    : bodyweightRecords.maxReps >= 15
+                    ? 'Validé'
+                    : `Reste ${15 - bodyweightRecords.maxReps} réps`}
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-xs">
               {repRecords.map((r) => (
@@ -793,16 +1002,48 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                   {r.record ? (
                     <div className="mt-1">
                       <div className="font-semibold text-zinc-100">
-                        {currentMeta.mechanic === 'bodyweight' && r.record.rawWeight === 0
-                          ? useEffectiveLoad
-                            ? `PDC (${unit === 'kg' ? `${lbsToKg(r.record.weight)} kg` : `${r.record.weight} lbs`})`
-                            : 'PDC'
-                          : unit === 'kg'
-                          ? `${lbsToKg(r.record.weight)} kg`
-                          : `${r.record.weight} lbs`}
+                        {currentMeta.mechanic === 'assisted' ? (
+                          useEffectiveLoad ? (
+                            <>
+                              {unit === 'kg'
+                                ? `${lbsToKg(Math.max(5, bodyweightLbs - r.record.rawWeight))} kg net`
+                                : `${Math.round(Math.max(5, bodyweightLbs - r.record.rawWeight) * 10) / 10} lbs net`}
+                            </>
+                          ) : (
+                            <>
+                              -{unit === 'kg' ? `${lbsToKg(r.record.rawWeight)} kg` : `${r.record.rawWeight} lbs`} (assist.)
+                            </>
+                          )
+                        ) : currentMeta.mechanic === 'bodyweight' && r.record.rawWeight === 0 ? (
+                          useEffectiveLoad ? (
+                            `PDC (${unit === 'kg' ? `${lbsToKg(r.record.weight)} kg` : `${r.record.weight} lbs`})`
+                          ) : (
+                            'PDC'
+                          )
+                        ) : unit === 'kg' ? (
+                          `${lbsToKg(r.record.weight)} kg`
+                        ) : (
+                          `${r.record.weight} lbs`
+                        )}
                       </div>
                       <div className="text-[10px] text-zinc-500 mt-0.5">
-                        {r.record.reps} réps &bull; {r.record.date.slice(2)}
+                        {currentMeta.mechanic === 'assisted' ? (
+                          <>
+                            {r.record.reps} réps &bull;{' '}
+                            {useEffectiveLoad
+                              ? `-${unit === 'kg' ? `${lbsToKg(r.record.rawWeight)}kg` : `${r.record.rawWeight}lbs`} assist.`
+                              : `net ${
+                                  unit === 'kg'
+                                    ? `${lbsToKg(Math.max(5, bodyweightLbs - r.record.rawWeight))}kg`
+                                    : `${Math.round(Math.max(5, bodyweightLbs - r.record.rawWeight) * 10) / 10}lbs`
+                                }`}{' '}
+                            &bull; {r.record.date.slice(2)}
+                          </>
+                        ) : (
+                          <>
+                            {r.record.reps} réps &bull; {r.record.date.slice(2)}
+                          </>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -836,6 +1077,32 @@ export const ExerciseTab: React.FC<ExerciseTabProps> = ({
                       <>
                         <span>Meilleure série : <strong className="text-zinc-200">{item.topDuration}s</strong></span>
                         <span>Cumul : <strong className="text-zinc-200">{item.totalDuration}s</strong></span>
+                      </>
+                    ) : currentMeta.mechanic === 'bodyweight' && !useEffectiveLoad ? (
+                      <>
+                        <span>
+                          Meilleure série :{' '}
+                          <strong className="text-zinc-200">
+                            {item.rawTopWeight > 0 ? `+${item.topWeight} ${unit}` : 'PDC'}
+                          </strong>{' '}
+                          &times; {item.topReps} réps
+                        </span>
+                        <span>
+                          Total séance : <strong className="text-zinc-200">{item.totalReps} réps</strong>
+                        </span>
+                      </>
+                    ) : currentMeta.mechanic === 'assisted' ? (
+                      <>
+                        <span>
+                          Top Set :{' '}
+                          <strong className="text-zinc-200">
+                            -{unit === 'kg' ? `${lbsToKg(item.rawTopWeight)} kg` : `${item.rawTopWeight} lbs`} (assist.)
+                          </strong>{' '}
+                          &times; {item.topReps}
+                        </span>
+                        <span>
+                          1RM Net : <strong className="text-zinc-200">{item.est1rm} {unit}</strong>
+                        </span>
                       </>
                     ) : (
                       <>

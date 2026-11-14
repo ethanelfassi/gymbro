@@ -73,14 +73,19 @@ export function isAberrantSet(
     return reps <= 0;
   }
 
-  // Standard or assisted exercises:
+  // Assisted exercises: low/zero assistance sets with >= 1 rep are valid
+  if (meta.mechanic === 'assisted') {
+    return reps <= 0;
+  }
+
+  // Standard exercises:
   // Placeholder/test sets like 1 rep at 1 lb, 2 reps at 1 lb, 1 rep at 2 lbs
   if (rawWeight <= 5 && reps <= 2) {
     return true;
   }
 
   // Standard weighted exercises with 0 weight and <= 2 reps
-  if (meta.mechanic === 'standard' && rawWeight <= 0 && reps <= 2) {
+  if (rawWeight <= 0 && reps <= 2) {
     return true;
   }
 
@@ -278,8 +283,8 @@ export function cleanAndParseLiftoffCSV(
             const setScore = effectiveLoad * reps;
             if (
               !hasTopSet ||
-              setScore > topSetScore ||
-              (setScore === topSetScore && rawWeight < topSetWeight)
+              est1rm > topSet1rm ||
+              (est1rm === topSet1rm && rawWeight < topSetWeight)
             ) {
               topSetScore = setScore;
               topSetWeight = rawWeight;
@@ -736,13 +741,15 @@ export function computeIntraSessionFatigue(sessions: WorkoutSession[]): IntraSes
 
   for (const s of sessions) {
     for (const ex of s.exercises) {
+      if (ex.meta.mechanic === 'duration' || ex.meta.category === 'Cardio') continue;
       const workingSets = ex.sets.filter((st) => !st.isWarmup && st.reps > 0);
       if (workingSets.length < 2) continue;
 
       const firstSet = workingSets[0];
       const lastSet = workingSets[workingSets.length - 1];
 
-      // Drop off in reps if weight is similar
+      // Drop off in reps only when load/assistance stays comparable across the exercise
+      if (Math.abs(firstSet.weightLbs - lastSet.weightLbs) > 5) continue;
       const repDrop = ((lastSet.reps - firstSet.reps) / firstSet.reps) * 100;
 
       result.push({

@@ -99,6 +99,7 @@ export interface WorkoutGoal {
 
 export interface GoalProgress {
   goal: WorkoutGoal;
+  mechanic: ExerciseMechanic;
   currentValueLbs: number;
   startValueLbs: number;
   targetValueLbs: number;
